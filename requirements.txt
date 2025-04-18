@@ -1,0 +1,7 @@
+selenium
+beautifulsoup4
+lxml
+tqdm
+pytz
+rich
+pandas 
