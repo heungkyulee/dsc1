@@ -1,0 +1,44 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# K-Startup 데이터 관리 프로그램 - 프로젝트 구조 가이드
+
+## 프로젝트 개요
+K-Startup API를 활용한 최신 지원사업 정보 관리 시스템입니다. Streamlit 기반 웹 애플리케이션으로 CRUD 기능과 RAG 챗봇을 제공합니다.
+
+## 핵심 파일 구조
+
+### 메인 애플리케이션
+- [app.py](mdc:app.py): Streamlit 메인 애플리케이션 파일
+- [main.py](mdc:main.py): 프로그램 진입점 및 초기화
+
+### 데이터 관리 모듈
+- [data_handler.py](mdc:data_handler.py): 데이터 CRUD 조작 로직
+- [crawler.py](mdc:crawler.py): K-Startup API 크롤링 및 데이터 수집
+- [analysis.py](mdc:analysis.py): 데이터 분석 및 처리 로직
+
+### 데이터 파일 (JSON)
+- [announcements.json](mdc:announcements.json): 공고 정보 저장
+- [organizations.json](mdc:organizations.json): 기관 정보 저장
+- [kstartup_contest_info.json](mdc:kstartup_contest_info.json): 지원사업 상세 정보
+- [index.json](mdc:index.json): 인덱스 및 메타데이터
+
+### 설정 파일
+- [requirements.txt](mdc:requirements.txt): Python 의존성 관리
+- [PROPOSAL.md](mdc:PROPOSAL.md): 프로젝트 제안서
+- [README.md](mdc:README.md): 프로젝트 문서
+
+## Streamlit 앱 구조
+1. **대시보드**: 데이터 시각화 및 통계 (Print 기능)
+2. **신규 지원사업 생성**: Create 기능
+3. **지원사업 검색 및 필터링**: Retrieve, Update, Delete 기능
+4. **챗봇**: Pinecone RAG 기반 질의응답 시스템
+
+## 개발 원칙
+- 모든 데이터 조작은 data_handler.py를 통해 수행
+- API 호출은 crawler.py에서 관리
+- Streamlit 컴포넌트는 명확한 책임 분리
+- 에러 처리 및 로깅 포함
+

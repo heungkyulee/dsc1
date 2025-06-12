@@ -1,6 +1,42 @@
-requests
-tqdm
-pytz
-rich
-pandas 
-streamlit 
+# 기본 의존성
+requests>=2.31.0
+tqdm>=4.66.0
+pytz>=2023.3
+rich>=13.7.0
+pandas>=2.1.0
+streamlit>=1.28.0
+streamlit-option-menu>=0.3.6
+
+# 환경 변수 관리
+python-dotenv>=1.0.0
+
+# AI/ML 관련
+openai>=1.0.0
+pinecone-client>=2.2.4
+sentence-transformers>=2.2.2
+tiktoken>=0.5.0
+
+# 데이터 시각화
+plotly>=5.17.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# 웹 스크래핑 및 HTML 처리
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+selenium>=4.15.0
+
+# 비동기 처리
+aiohttp>=3.9.0
+asyncio>=0.0.0
+
+# 유틸리티
+jsonschema>=4.19.0
+python-dateutil>=2.8.0
+uuid>=1.30
+
+# 개발 도구 (선택사항)
+black>=23.11.0
+flake8>=6.1.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0 

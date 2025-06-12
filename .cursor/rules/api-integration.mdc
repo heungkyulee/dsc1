@@ -1,0 +1,231 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# API 통합 및 RAG 시스템 가이드라인
+
+## K-Startup API 통합 ([crawler.py](mdc:crawler.py))
+
+### API 엔드포인트 관리
+```python
+# API 기본 설정
+K_STARTUP_BASE_URL = "https://www.k-startup.go.kr"
+API_ENDPOINTS = {
+    "announcements": "/api/announcements",
+    "organizations": "/api/organizations", 
+    "contests": "/api/contests"
+}
+
+# 요청 헤더 설정
+DEFAULT_HEADERS = {
+    "User-Agent": "K-Startup Data Manager/1.0",
+    "Accept": "application/json",
+    "Content-Type": "application/json"
+}
+```
+
+### 데이터 수집 함수 구조
+```python
+async def fetch_announcements(page: int = 1, size: int = 100) -> Dict:
+    """K-Startup API에서 공고 정보를 비동기적으로 수집"""
+    try:
+        # API 호출 로직
+        # 응답 검증
+        # 데이터 정규화
+        pass
+    except Exception as e:
+        logger.error(f"API 호출 실패: {e}")
+        return {"error": str(e)}
+```
+
+### 에러 처리 및 재시도 로직
+- **Rate Limiting**: API 호출 빈도 제한 준수
+- **Exponential Backoff**: 실패 시 재시도 간격 증가
+- **Circuit Breaker**: 연속 실패 시 임시 중단
+- **로깅**: 모든 API 호출 및 에러 기록
+
+### 데이터 검증 및 정규화
+```python
+def validate_announcement_data(data: Dict) -> bool:
+    """공고 데이터 유효성 검증"""
+    required_fields = ["title", "organization", "deadline"]
+    return all(field in data and data[field] for field in required_fields)
+
+def normalize_announcement(raw_data: Dict) -> Dict:
+    """API 응답 데이터를 내부 스키마로 변환"""
+    return {
+        "id": generate_unique_id(),
+        "title": clean_text(raw_data.get("title", "")),
+        "organization": raw_data.get("org_name", ""),
+        # ... 추가 필드 매핑
+    }
+```
+
+## Pinecone RAG 시스템 통합
+
+### 벡터 데이터베이스 설정
+```python
+import pinecone
+from sentence_transformers import SentenceTransformer
+
+# Pinecone 초기화
+pinecone.init(
+    api_key="your-api-key",
+    environment="your-environment"
+)
+
+# 인덱스 생성/연결
+index_name = "kstartup-announcements"
+if index_name not in pinecone.list_indexes():
+    pinecone.create_index(
+        index_name,
+        dimension=768,  # sentence-transformers 모델 차원
+        metric="cosine"
+    )
+
+index = pinecone.Index(index_name)
+```
+
+### 임베딩 생성 및 저장
+```python
+class EmbeddingManager:
+    def __init__(self):
+        self.model = SentenceTransformer('distiluse-base-multilingual-cased')
+    
+    def create_announcement_embedding(self, announcement: Dict) -> List[float]:
+        """지원사업 정보를 벡터로 변환"""
+        text = self._prepare_text_for_embedding(announcement)
+        return self.model.encode(text).tolist()
+    
+    def _prepare_text_for_embedding(self, announcement: Dict) -> str:
+        """임베딩을 위한 텍스트 전처리"""
+        parts = [
+            announcement.get("title", ""),
+            announcement.get("description", ""),
+            announcement.get("category", ""),
+            announcement.get("organization", "")
+        ]
+        return " ".join(filter(None, parts))
+```
+
+### RAG 질의응답 시스템
+```python
+class RAGChatbot:
+    def __init__(self, pinecone_index, embedding_model):
+        self.index = pinecone_index
+        self.embedder = embedding_model
+        self.llm = initialize_llm()  # OpenAI, Anthropic 등
+    
+    def get_response(self, user_query: str) -> Dict:
+        """사용자 질문에 대한 RAG 기반 응답 생성"""
+        # 1. 질문 임베딩
+        query_embedding = self.embedder.encode(user_query).tolist()
+        
+        # 2. 유사한 지원사업 검색
+        search_results = self.index.query(
+            vector=query_embedding,
+            top_k=5,
+            include_metadata=True
+        )
+        
+        # 3. 컨텍스트 구성
+        context = self._build_context(search_results)
+        
+        # 4. LLM을 통한 답변 생성
+        response = self._generate_response(user_query, context)
+        
+        return {
+            "answer": response,
+            "sources": self._extract_sources(search_results),
+            "confidence": self._calculate_confidence(search_results)
+        }
+    
+    def _build_context(self, search_results) -> str:
+        """검색 결과를 컨텍스트로 구성"""
+        contexts = []
+        for match in search_results.matches:
+            metadata = match.metadata
+            context = f"""
+            지원사업: {metadata.get('title', '')}
+            기관: {metadata.get('organization', '')}
+            내용: {metadata.get('description', '')}
+            마감일: {metadata.get('deadline', '')}
+            """
+            contexts.append(context)
+        return "\n---\n".join(contexts)
+```
+
+### 챗봇 대화 관리
+```python
+class ConversationManager:
+    def __init__(self):
+        self.chat_history = []
+        self.max_history = 10
+    
+    def add_message(self, role: str, content: str):
+        """대화 기록 추가"""
+        self.chat_history.append({
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # 기록 길이 제한
+        if len(self.chat_history) > self.max_history:
+            self.chat_history = self.chat_history[-self.max_history:]
+    
+    def get_context_for_llm(self) -> List[Dict]:
+        """LLM에 전달할 대화 컨텍스트 구성"""
+        return [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in self.chat_history[-5:]  # 최근 5개 메시지만
+        ]
+```
+
+## 성능 최적화 전략
+
+### 비동기 처리
+- API 호출: `asyncio` 및 `aiohttp` 활용
+- 임베딩 생성: 배치 처리로 효율성 증대
+- 데이터베이스 작업: 비동기 쿼리 사용
+
+### 캐싱 전략
+```python
+from functools import lru_cache
+import redis
+
+# 메모리 캐시
+@lru_cache(maxsize=1000)
+def get_cached_embedding(text_hash: str):
+    # 자주 사용되는 임베딩 캐시
+    pass
+
+# Redis 캐시 (선택사항)
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
+
+def cache_search_results(query_hash: str, results: Dict, ttl: int = 3600):
+    """검색 결과 캐싱"""
+    redis_client.setex(query_hash, ttl, json.dumps(results))
+```
+
+### 모니터링 및 로깅
+```python
+import logging
+from datetime import datetime
+
+# 로거 설정
+logger = logging.getLogger("kstartup_app")
+logger.setLevel(logging.INFO)
+
+# API 호출 추적
+def log_api_call(endpoint: str, status: int, response_time: float):
+    logger.info(f"API Call - Endpoint: {endpoint}, Status: {status}, Time: {response_time:.2f}s")
+
+# 챗봇 상호작용 추적
+def log_chat_interaction(user_query: str, response_quality: float):
+    logger.info(f"Chat - Query: {user_query[:50]}..., Quality: {response_quality}")
+```
+
+이 가이드라인을 따라 안정적이고 효율적인 API 통합 및 RAG 시스템을 구축하세요.
+

@@ -1,0 +1,316 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 코드 품질 관리 가이드라인
+
+## 코드 리뷰 체크리스트
+
+### 기능적 요구사항
+- [ ] CRUD 기능이 올바르게 동작하는가?
+- [ ] 데이터 검증이 적절히 수행되는가?
+- [ ] 에러 처리가 포함되어 있는가?
+- [ ] API 응답을 올바르게 처리하는가?
+
+### 코드 구조
+- [ ] 함수/클래스가 단일 책임 원칙을 따르는가?
+- [ ] 코드 중복이 최소화되었는가?
+- [ ] 의존성이 명확히 관리되고 있는가?
+- [ ] 설정값이 하드코딩되지 않았는가?
+
+### 성능 고려사항
+- [ ] 불필요한 API 호출이 없는가?
+- [ ] 대용량 데이터 처리 시 메모리 효율적인가?
+- [ ] 캐싱이 적절히 활용되었는가?
+- [ ] 데이터베이스 쿼리가 최적화되었는가?
+
+## 테스팅 전략
+
+### 단위 테스트 (Unit Tests)
+```python
+import unittest
+from unittest.mock import patch, MagicMock
+from data_handler import DataHandler
+
+class TestDataHandler(unittest.TestCase):
+    def setUp(self):
+        self.data_handler = DataHandler()
+    
+    def test_create_announcement_success(self):
+        """공고 생성 성공 테스트"""
+        test_data = {
+            "title": "테스트 공고",
+            "organization": "테스트 기관",
+            "deadline": "2024-12-31"
+        }
+        
+        result = self.data_handler.create_announcement(test_data)
+        self.assertIsNotNone(result)
+        self.assertIn("id", result)
+    
+    def test_create_announcement_validation_failure(self):
+        """공고 생성 검증 실패 테스트"""
+        invalid_data = {"title": ""}  # 빈 제목
+        
+        with self.assertRaises(ValueError):
+            self.data_handler.create_announcement(invalid_data)
+    
+    @patch('crawler.requests.get')
+    def test_api_call_with_mock(self, mock_get):
+        """API 호출 모킹 테스트"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"status": "success"}
+        mock_get.return_value = mock_response
+        
+        result = fetch_announcements()
+        self.assertEqual(result["status"], "success")
+```
+
+### 통합 테스트 (Integration Tests)
+```python
+import pytest
+import tempfile
+import os
+
+class TestDataIntegration:
+    def setup_method(self):
+        """테스트용 임시 파일 생성"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.test_file = os.path.join(self.temp_dir, "test_announcements.json")
+    
+    def teardown_method(self):
+        """테스트 후 정리"""
+        if os.path.exists(self.test_file):
+            os.remove(self.test_file)
+        os.rmdir(self.temp_dir)
+    
+    def test_full_crud_cycle(self):
+        """전체 CRUD 사이클 테스트"""
+        handler = DataHandler(data_file=self.test_file)
+        
+        # Create
+        test_data = {"title": "통합테스트 공고", "organization": "테스트기관"}
+        created_id = handler.create_announcement(test_data)
+        
+        # Read
+        retrieved = handler.get_announcement_by_id(created_id)
+        assert retrieved["title"] == test_data["title"]
+        
+        # Update
+        updated_data = {"title": "수정된 공고"}
+        success = handler.update_announcement(created_id, updated_data)
+        assert success is True
+        
+        # Delete
+        deleted = handler.delete_announcement(created_id)
+        assert deleted is True
+```
+
+### Streamlit 앱 테스트
+```python
+import streamlit as st
+from streamlit.testing.v1 import AppTest
+
+def test_dashboard_page():
+    """대시보드 페이지 렌더링 테스트"""
+    at = AppTest.from_file("app.py")
+    at.run()
+    
+    # 페이지 선택
+    at.sidebar.selectbox[0].select("대시보드").run()
+    
+    # 메트릭이 표시되는지 확인
+    assert len(at.metric) > 0
+    assert "전체 지원사업" in str(at.metric[0])
+
+def test_create_announcement_form():
+    """공고 생성 폼 테스트"""
+    at = AppTest.from_file("app.py")
+    at.run()
+    
+    # 신규 생성 페이지 선택
+    at.sidebar.selectbox[0].select("신규 지원사업 생성").run()
+    
+    # 폼 입력
+    at.text_input[0].input("테스트 공고").run()
+    at.selectbox[0].select("테스트 기관").run()
+    
+    # 제출 버튼 클릭
+    at.button[0].click().run()
+    
+    # 성공 메시지 확인
+    assert len(at.success) > 0
+```
+
+## 로깅 및 모니터링
+
+### 로깅 설정
+```python
+import logging
+import sys
+from datetime import datetime
+
+# 로깅 설정
+def setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('kstartup_app.log'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+# 구조화된 로깅
+def log_user_action(action: str, user_id: str = None, details: dict = None):
+    """사용자 액션 로깅"""
+    log_data = {
+        "timestamp": datetime.now().isoformat(),
+        "action": action,
+        "user_id": user_id or "anonymous",
+        "details": details or {}
+    }
+    
+    logger = logging.getLogger("user_actions")
+    logger.info(f"User Action: {log_data}")
+
+# 성능 모니터링
+import time
+from functools import wraps
+
+def monitor_performance(func):
+    """함수 실행 시간 모니터링 데코레이터"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        try:
+            result = func(*args, **kwargs)
+            execution_time = time.time() - start_time
+            
+            logger = logging.getLogger("performance")
+            logger.info(f"{func.__name__} executed in {execution_time:.2f}s")
+            
+            return result
+        except Exception as e:
+            execution_time = time.time() - start_time
+            logger = logging.getLogger("performance")
+            logger.error(f"{func.__name__} failed in {execution_time:.2f}s: {e}")
+            raise
+    return wrapper
+```
+
+### 건강성 체크
+```python
+def health_check() -> dict:
+    """애플리케이션 건강성 체크"""
+    checks = {
+        "database": check_json_files(),
+        "api": check_kstartup_api(),
+        "pinecone": check_pinecone_connection(),
+        "memory": check_memory_usage()
+    }
+    
+    all_healthy = all(checks.values())
+    
+    return {
+        "status": "healthy" if all_healthy else "unhealthy",
+        "checks": checks,
+        "timestamp": datetime.now().isoformat()
+    }
+
+def check_json_files() -> bool:
+    """JSON 파일 접근성 체크"""
+    required_files = [
+        "announcements.json",
+        "organizations.json", 
+        "kstartup_contest_info.json"
+    ]
+    
+    return all(os.path.exists(f) and os.access(f, os.R_OK) for f in required_files)
+```
+
+## 보안 가이드라인
+
+### 입력 검증
+```python
+import re
+from typing import Any
+
+def sanitize_input(input_data: Any) -> Any:
+    """사용자 입력 데이터 정제"""
+    if isinstance(input_data, str):
+        # HTML 태그 제거
+        clean_text = re.sub(r'<[^>]+>', '', input_data)
+        # 스크립트 태그 완전 제거
+        clean_text = re.sub(r'<script.*?</script>', '', clean_text, flags=re.DOTALL)
+        return clean_text.strip()
+    
+    elif isinstance(input_data, dict):
+        return {k: sanitize_input(v) for k, v in input_data.items()}
+    
+    elif isinstance(input_data, list):
+        return [sanitize_input(item) for item in input_data]
+    
+    return input_data
+
+def validate_date_format(date_string: str) -> bool:
+    """날짜 형식 검증"""
+    pattern = r'^\d{4}-\d{2}-\d{2}$'
+    return bool(re.match(pattern, date_string))
+```
+
+### API 키 관리
+```python
+import os
+from dotenv import load_dotenv
+
+# 환경 변수 로드
+load_dotenv()
+
+# API 키는 환경 변수에서만 로드
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not PINECONE_API_KEY:
+    raise ValueError("PINECONE_API_KEY 환경 변수가 설정되지 않았습니다")
+```
+
+## 코드 품질 도구
+
+### 정적 분석 도구 설정
+```bash
+# requirements-dev.txt
+black==23.0.0
+flake8==6.0.0
+mypy==1.0.0
+pylint==2.15.0
+pytest==7.2.0
+pytest-cov==4.0.0
+```
+
+### pre-commit 훅 설정
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/psf/black
+    rev: 23.1.0
+    hooks:
+      - id: black
+        language_version: python3.11
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args: [--max-line-length=88]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.0.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-requests]
+```
+
+이 가이드라인을 따라 높은 품질의 안전한 코드를 작성하고 유지보수하세요.
+

@@ -1,0 +1,71 @@
+# 환경 변수 파일 (API 키 포함)
+.env
+.env.local
+.env.production
+.env.staging
+
+# Python 캐시 파일
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 로그 파일
+*.log
+logs/
+kstartup_app.log
+
+# IDE 설정 파일
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS 생성 파일
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 임시 파일
+*.tmp
+*.temp
+temp/
+tmp/
+
+# 데이터베이스 파일
+*.db
+*.sqlite
+*.sqlite3
+
+# 백업 파일
+*.bak
+*.backup
+
+# 압축 파일
+*.zip
+*.tar.gz
+*.rar
+
+# Jupyter Notebook 체크포인트
+.ipynb_checkpoints/
+
+# pytest 캐시
+.pytest_cache/
+
+# Coverage 리포트
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# mypy 캐시
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Streamlit 캐시
+.streamlit/ 

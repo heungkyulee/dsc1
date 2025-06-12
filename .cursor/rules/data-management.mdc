@@ -1,0 +1,74 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# 데이터 관리 규칙
+
+## JSON 데이터 구조 표준
+
+### 지원사업 데이터 스키마
+모든 지원사업 데이터는 다음 구조를 따라야 합니다:
+
+```json
+{
+  "id": "unique_identifier",
+  "title": "지원사업 제목",
+  "organization": "주관기관",
+  "description": "상세 설명",
+  "deadline": "YYYY-MM-DD",
+  "category": "지원분야",
+  "budget": "지원금액",
+  "eligibility": "신청자격",
+  "status": "active|inactive|expired",
+  "created_at": "YYYY-MM-DD HH:MM:SS",
+  "updated_at": "YYYY-MM-DD HH:MM:SS",
+  "source_url": "원본 URL"
+}
+```
+
+## 데이터 파일 관리 원칙
+
+### 파일별 역할
+- **announcements.json**: 공고 목록 및 기본 정보
+- **organizations.json**: 기관별 정보 및 통계
+- **kstartup_contest_info.json**: 상세한 지원사업 정보
+- **index.json**: 검색 인덱스 및 메타데이터
+
+### 데이터 무결성 보장
+1. **백업**: 데이터 수정 전 자동 백업 생성
+2. **검증**: 스키마 유효성 체크 필수
+3. **로깅**: 모든 CRUD 작업 로그 기록
+4. **트랜잭션**: 원자적 연산으로 데이터 일관성 유지
+
+### 파일 접근 규칙
+- 모든 JSON 파일 읽기/쓰기는 [data_handler.py](mdc:data_handler.py)를 통해서만 수행
+- 직접적인 파일 조작 금지
+- UTF-8 인코딩 강제 사용
+- 예외 처리 및 에러 복구 메커니즘 포함
+
+## CRUD 함수 명명 규칙
+
+### Create 함수
+- `create_announcement(data: dict) -> str`
+- `add_organization(org_data: dict) -> bool`
+
+### Read 함수
+- `get_announcement_by_id(announcement_id: str) -> dict`
+- `search_announcements(query: str, filters: dict) -> list`
+- `list_all_organizations() -> list`
+
+### Update 함수
+- `update_announcement(announcement_id: str, data: dict) -> bool`
+- `modify_organization(org_id: str, updates: dict) -> bool`
+
+### Delete 함수
+- `delete_announcement(announcement_id: str) -> bool`
+- `remove_organization(org_id: str) -> bool`
+
+## 데이터 동기화
+- K-Startup API와의 동기화는 [crawler.py](mdc:crawler.py)에서 관리
+- 주기적 업데이트 스케줄링
+- 중복 데이터 자동 감지 및 제거
+- API 장애 시 로컬 데이터 우선 사용
+
