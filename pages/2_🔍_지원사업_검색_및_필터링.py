@@ -18,7 +18,7 @@ from logger import get_logger, log_user_action
 import data_handler
 from ui.styles import apply_custom_styles
 from ui.sidebar_info import render_sidebar_info
-from utils.data_utils import initialize_session_state, load_announcements_data
+from utils.data_utils import initialize_session_state, load_announcements_data, load_announcements_data_fresh, clear_announcements_cache
 from utils.ui_utils import (
     get_deadline_status, get_status_color, prepare_csv_download, 
     edit_announcement
@@ -264,44 +264,129 @@ def render_card_view(df):
                 st.markdown(description)
             
             # 액션 버튼
-            action_col1, action_col2, action_col3, action_col4 = st.columns(4)
+            action_col1, action_col2 = st.columns(2)
             
             with action_col1:
+                # 수정 기능 개선 - 여러 ID 필드 확인
+                contest_id = None
+                possible_id_fields = ['pblancId', 'id']
+                
+                # 가능한 ID 필드들을 순서대로 확인
+                for id_field in possible_id_fields:
+                    if id_field in row and pd.notna(row[id_field]) and row[id_field]:
+                        contest_id = str(row[id_field])
+                        break
+                
+                # 모든 ID 필드가 없으면 인덱스 사용
+                if not contest_id:
+                    contest_id = str(idx)
+                
                 if st.button("✏️ 수정", key=f"edit_{idx}"):
-                    edit_announcement(str(idx), row)
+                    # 디버깅 정보 출력
+                    st.info(f"🔍 수정 대상 ID: {contest_id} (원본 인덱스: {idx})")
+                    edit_announcement(contest_id, row)
             
             with action_col2:
+                # 삭제 기능 개선 - 수정과 동일한 ID 로직
+                delete_contest_id = None
+                possible_id_fields = ['pblancId', 'id']
+                
+                # 가능한 ID 필드들을 순서대로 확인
+                for id_field in possible_id_fields:
+                    if id_field in row and pd.notna(row[id_field]) and row[id_field]:
+                        delete_contest_id = str(row[id_field])
+                        break
+                
+                # 모든 ID 필드가 없으면 인덱스 사용
+                if not delete_contest_id:
+                    delete_contest_id = str(idx)
+                
                 if st.button("🗑️ 삭제", key=f"delete_{idx}", type="secondary"):
                     if st.session_state.get(f"confirm_delete_{idx}", False):
-                        success = data_handler.delete_contest(str(idx))
-                        if success:
-                            st.success("삭제되었습니다.")
-                            log_user_action("delete_announcement", details={"id": str(idx)})
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error("삭제 실패")
+                        # 디버깅 정보 출력
+                        st.info(f"🗑️ 삭제 대상 ID: {delete_contest_id} (원본 인덱스: {idx})")
+                        # 진행 상태 표시
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        try:
+                            # 1단계: 삭제 준비
+                            status_text.text("🗑️ 삭제 준비 중...")
+                            progress_bar.progress(25)
+                            
+                            # 2단계: JSON 파일에서 삭제
+                            status_text.text("💾 데이터베이스에서 삭제 중...")
+                            progress_bar.progress(50)
+                            
+                            # delete_contest 함수 사용 (Pinecone 삭제 포함)
+                            success = data_handler.delete_contest(delete_contest_id)
+                            
+                            if success:
+                                # 3단계: AI 시스템에서 삭제 완료
+                                status_text.text("🤖 AI 검색 시스템에서 삭제 완료!")
+                                progress_bar.progress(100)
+                                
+                                st.success("✅ 삭제되었습니다! (JSON 파일과 AI 검색 시스템에서 모두 제거되었습니다)")
+                                
+                                # 로깅
+                                log_user_action("delete_announcement", details={
+                                    "id": delete_contest_id,
+                                    "title": row.get('title', 'Unknown')
+                                })
+                                
+                                # 캐시 초기화 및 실시간 데이터 로드 플래그 설정
+                                if hasattr(st, 'cache_data'):
+                                    st.cache_data.clear()
+                                
+                                # 다음 페이지 로드 시 실시간 데이터 사용하도록 플래그 설정
+                                st.session_state['need_refresh'] = True
+                                
+                                # 확인 상태 초기화
+                                st.session_state[f"confirm_delete_{idx}"] = False
+                                
+                                # 페이지 새로고침
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                status_text.text("❌ 삭제 실패")
+                                progress_bar.progress(0)
+                                st.error("❌ 삭제 중 오류가 발생했습니다.")
+                                st.session_state[f"confirm_delete_{idx}"] = False
+                        
+                        except Exception as e:
+                            status_text.text("❌ 삭제 오류")
+                            progress_bar.progress(0)
+                            st.error(f"❌ 삭제 중 오류가 발생했습니다: {str(e)}")
+                            st.session_state[f"confirm_delete_{idx}"] = False
+                            logger.error(f"공고 삭제 실패 - ID: {delete_contest_id}, Error: {e}")
+                        
+                        finally:
+                            # 진행 상태 UI 정리
+                            time.sleep(1)
+                            progress_bar.empty()
+                            status_text.empty()
                     else:
                         st.session_state[f"confirm_delete_{idx}"] = True
-                        st.warning("다시 클릭하면 삭제됩니다.")
+                        st.warning("⚠️ 다시 클릭하면 완전히 삭제됩니다. (JSON 파일과 AI 검색 시스템에서 모두 제거)")
+                        st.info("💡 삭제 후에는 복구할 수 없습니다.")
             
-            with action_col3:
-                if st.button("📋 복사", key=f"copy_{idx}"):
-                    # 공고 정보를 텍스트로 정리
-                    copy_text = f"""
-{title}
-주관기관: {org_name}
-지원분야: {category}
-마감일: {deadline_str if 'deadline_str' in locals() else 'N/A'}
-연락처: {contact}
-                    """.strip()
-                    st.code(copy_text, language=None)
-                    st.success("공고 정보가 복사 가능한 형태로 표시되었습니다!")
+#             with action_col3:
+#                 if st.button("📋 복사", key=f"copy_{idx}"):
+#                     # 공고 정보를 텍스트로 정리
+#                     copy_text = f"""
+# {title}
+# 주관기관: {org_name}
+# 지원분야: {category}
+# 마감일: {deadline_str if 'deadline_str' in locals() else 'N/A'}
+# 연락처: {contact}
+#                     """.strip()
+#                     st.code(copy_text, language=None)
+#                     st.success("공고 정보가 복사 가능한 형태로 표시되었습니다!")
             
-            with action_col4:
-                if st.button("🔗 링크", key=f"link_{idx}"):
-                    # 외부 링크나 상세 페이지로 이동 (구현에 따라 조정)
-                    st.info("원본 페이지 링크 기능은 추후 구현 예정입니다.")
+#             with action_col4:
+#                 if st.button("🔗 링크", key=f"link_{idx}"):
+#                     # 외부 링크나 상세 페이지로 이동 (구현에 따라 조정)
+#                     st.info("원본 페이지 링크 기능은 추후 구현 예정입니다.")
             
             # 구분선
             st.markdown("---")
@@ -383,9 +468,18 @@ def main():
         st.title("🔍 지원사업 검색 및 관리")
         st.markdown("### 원하는 지원사업을 빠르게 찾고 관리하세요")
         
-        # 데이터 로드
+        # 데이터 로드 - 실시간 데이터 사용
         with st.spinner("🔍 검색 데이터를 준비하는 중..."):
-            df_announcements = load_announcements_data()
+            # 수정/삭제 후에는 실시간 데이터 로드
+            use_fresh_data = st.session_state.get('need_refresh', False)
+            
+            if use_fresh_data:
+                st.info("🔄 최신 데이터를 로드하는 중...")
+                df_announcements = load_announcements_data_fresh()
+                st.session_state['need_refresh'] = False
+                clear_announcements_cache()
+            else:
+                df_announcements = load_announcements_data()
         
         if df_announcements.empty:
             st.warning("⚠️ 검색할 데이터가 없습니다")
@@ -545,9 +639,18 @@ def main():
                 )
         
         with stats_col2:
-            if st.button("🔄 필터 초기화", help="모든 검색 조건을 초기화"):
-                st.session_state.search_query = ""
-                st.rerun()
+            col2_1, col2_2 = st.columns(2)
+            with col2_1:
+                if st.button("🔄 필터 초기화", help="모든 검색 조건을 초기화"):
+                    st.session_state.search_query = ""
+                    st.rerun()
+            
+            with col2_2:
+                if st.button("🔄 데이터 새로고침", help="최신 데이터 강제 로드"):
+                    clear_announcements_cache()
+                    st.session_state['need_refresh'] = True
+                    st.success("캐시를 초기화했습니다!")
+                    st.rerun()
         
         with stats_col3:
             # 즐겨찾기 기능 (세션 상태로 간단 구현)

@@ -194,9 +194,21 @@ def prepare_csv_download(df):
 
 
 def edit_announcement(announcement_id: str, current_data):
-    """공고 수정 폼 - 개선된 UI"""
+    """공고 수정 폼 - 개선된 UI 및 Pinecone 업데이트 포함"""
     st.markdown("---")
     st.markdown(f"### ✏️ 공고 수정: {current_data.get('title', '제목없음')}")
+    
+    # 수정 전 원본 데이터 표시
+    with st.expander("📋 현재 데이터 미리보기", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**제목:**", current_data.get('title', 'N/A'))
+            st.write("**기관:**", current_data.get('organization', current_data.get('org_name_ref', 'N/A')))
+            st.write("**분야:**", current_data.get('category', current_data.get('support_field', 'N/A')))
+        with col2:
+            st.write("**지역:**", current_data.get('region', 'N/A'))
+            st.write("**마감일:**", current_data.get('deadline', 'N/A'))
+            st.write("**대상:**", current_data.get('target_audience', 'N/A'))
     
     with st.form(f"edit_form_{announcement_id}"):
         # 기본 정보 섹션
@@ -232,18 +244,18 @@ def edit_announcement(announcement_id: str, current_data):
                 help="신청 가능한 대상을 입력하세요"
             )
             
-            # 마감일 입력
-            deadline_value = current_data.get('deadline', '')
-            if deadline_value and pd.notna(deadline_value):
-                if hasattr(deadline_value, 'date'):
-                    deadline_value = deadline_value.date()
-                else:
-                    try:
-                        deadline_value = pd.to_datetime(deadline_value).date()
-                    except:
-                        deadline_value = None
-            else:
-                deadline_value = None
+            # 마감일 입력 처리 개선
+            deadline_value = None
+            if current_data.get('deadline'):
+                try:
+                    deadline_str = current_data.get('deadline')
+                    if hasattr(deadline_str, 'date'):
+                        deadline_value = deadline_str.date()
+                    else:
+                        deadline_value = pd.to_datetime(deadline_str).date()
+                except Exception as e:
+                    logger.warning(f"마감일 파싱 오류: {e}")
+                    deadline_value = None
             
             new_deadline = st.date_input(
                 "마감일", 
@@ -256,17 +268,33 @@ def edit_announcement(announcement_id: str, current_data):
         contact_col1, contact_col2 = st.columns(2)
         
         with contact_col1:
+            # 연락처 데이터 처리 개선
+            contact_value = current_data.get('contact', '')
+            if not contact_value:
+                inquiry_data = current_data.get('inquiry', [])
+                if isinstance(inquiry_data, list) and inquiry_data:
+                    contact_value = ', '.join(str(item) for item in inquiry_data if item)
+                else:
+                    contact_value = str(inquiry_data) if inquiry_data else ''
+            
             new_contact = st.text_area(
                 "연락처", 
-                value=current_data.get('contact', current_data.get('inquiry', '')),
+                value=contact_value,
                 height=100,
                 help="담당자 연락처나 문의처를 입력하세요"
             )
         
         with contact_col2:
+            # 지원내용 데이터 처리 개선
+            support_value = current_data.get('support_content', '')
+            if not support_value:
+                support_value = current_data.get('budget', '')
+            if isinstance(support_value, list):
+                support_value = ', '.join(str(item) for item in support_value if item)
+            
             new_support_content = st.text_area(
                 "지원내용", 
-                value=current_data.get('support_content', current_data.get('budget', '')),
+                value=str(support_value) if support_value else '',
                 height=100,
                 help="지원금액, 지원내용 등을 입력하세요"
             )
@@ -285,17 +313,27 @@ def edit_announcement(announcement_id: str, current_data):
         app_info_col1, app_info_col2 = st.columns(2)
         
         with app_info_col1:
+            # 신청방법 데이터 처리
+            app_method_value = current_data.get('application_method', [])
+            if isinstance(app_method_value, list):
+                app_method_value = ', '.join(str(item) for item in app_method_value if item and 'None' not in str(item))
+            
             new_app_method = st.text_area(
                 "신청방법", 
-                value=current_data.get('application_method', ''),
+                value=str(app_method_value) if app_method_value else '',
                 height=100,
                 help="신청방법과 절차를 입력하세요"
             )
         
         with app_info_col2:
+            # 제출서류 데이터 처리
+            documents_value = current_data.get('submission_documents', [])
+            if isinstance(documents_value, list):
+                documents_value = ', '.join(str(item) for item in documents_value if item and 'None' not in str(item))
+            
             new_documents = st.text_area(
                 "제출서류", 
-                value=current_data.get('submission_documents', ''),
+                value=str(documents_value) if documents_value else '',
                 height=100,
                 help="필요한 제출서류를 입력하세요"
             )
@@ -311,45 +349,97 @@ def edit_announcement(announcement_id: str, current_data):
                 elif not new_organization.strip():
                     st.error("❌ 주관기관은 필수 입력 항목입니다.")
                 else:
+                    # 진행 상태 표시
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
                     try:
+                        # 1단계: 데이터 구성
+                        status_text.text("📝 수정 데이터 구성 중...")
+                        progress_bar.progress(25)
+                        
+                        # pblancId 가져오기 (기존 데이터에서)
+                        pblancId = current_data.get('pblancId', announcement_id)
+                        
+                        # 디버깅 정보 출력
+                        st.write("🔍 **디버깅 정보:**")
+                        st.write(f"- 입력받은 ID: `{announcement_id}`")
+                        st.write(f"- 현재 데이터의 pblancId: `{current_data.get('pblancId', 'N/A')}`")
+                        st.write(f"- 사용할 ID: `{pblancId}`")
+                        st.write(f"- 현재 데이터 키들: {list(current_data.keys())[:10]}")
+                        
                         updated_data = {
                             "title": new_title.strip(),
                             "organization": new_organization.strip(),
                             "org_name_ref": new_organization.strip(),
                             "category": new_category.strip(),
                             "support_field": new_category.strip(),
-                            "region": new_region.strip(),
-                            "target_audience": new_target.strip(),
+                            "region": new_region.strip() or "전국",
+                            "target_audience": new_target.strip() or "제한 없음",
                             "deadline": new_deadline.isoformat() if new_deadline else None,
                             "contact": new_contact.strip(),
-                            "inquiry": new_contact.strip(),
+                            "inquiry": [new_contact.strip()] if new_contact.strip() else [],
                             "support_content": new_support_content.strip(),
                             "budget": new_support_content.strip(),
                             "description": new_description.strip(),
-                            "application_method": new_app_method.strip(),
-                            "submission_documents": new_documents.strip(),
+                            "application_method": [method.strip() for method in new_app_method.split(',') if method.strip()] if new_app_method else ['온라인 신청'],
+                            "submission_documents": [doc.strip() for doc in new_documents.split(',') if doc.strip()] if new_documents else [],
                             "updated_at": datetime.now().isoformat()
                         }
                         
-                        success = data_handler.update_announcement(announcement_id, updated_data)
+                        st.write(f"- 업데이트할 필드 수: {len(updated_data)}")
+                        
+                        # 2단계: 데이터베이스 업데이트 (JSON 파일 + Pinecone)
+                        status_text.text("💾 데이터베이스 업데이트 중...")
+                        progress_bar.progress(50)
+                        
+                        # update_contest 함수 사용 (Pinecone 업데이트 포함)
+                        st.write(f"- update_contest 함수 호출 중... ID: `{pblancId}`")
+                        success = data_handler.update_contest(pblancId, updated_data)
                         
                         if success:
-                            st.success("✅ 수정이 완료되었습니다!")
-                            log_user_action("update_announcement", details={
-                                "id": announcement_id,
-                                "title": new_title
-                            })
-                            st.cache_data.clear()
+                            # 3단계: AI 시스템 업데이트 완료
+                            status_text.text("🤖 AI 검색 시스템 업데이트 완료!")
+                            progress_bar.progress(100)
                             
-                            # 3초 후 자동으로 페이지 새로고침
+                            st.success("✅ 수정이 완료되었습니다! (JSON 파일과 AI 검색 시스템이 모두 업데이트되었습니다)")
+                            
+                            # 로깅
+                            log_user_action("update_announcement", details={
+                                "id": pblancId,
+                                "title": new_title,
+                                "organization": new_organization
+                            })
+                            
+                            # 캐시 초기화 및 실시간 데이터 로드 플래그 설정
+                            if hasattr(st, 'cache_data'):
+                                st.cache_data.clear()
+                            
+                            # 다음 페이지 로드 시 실시간 데이터 사용하도록 플래그 설정
+                            st.session_state['need_refresh'] = True
+                            
+                            # 성공 후 안내
+                            st.info("🔄 수정이 완료되었습니다! 페이지를 새로고침합니다...")
                             time.sleep(2)
                             st.rerun()
                         else:
+                            status_text.text("❌ 업데이트 실패")
+                            progress_bar.progress(0)
                             st.error("❌ 수정 중 오류가 발생했습니다.")
+                            st.error("📋 **디버깅 힌트:** 위의 디버깅 정보와 콘솔 로그를 확인해주세요.")
                     
                     except Exception as e:
+                        status_text.text("❌ 오류 발생")
+                        progress_bar.progress(0)
                         st.error(f"❌ 오류가 발생했습니다: {str(e)}")
-                        logger.error(f"공고 수정 실패 - ID: {announcement_id}, Error: {e}")
+                        st.info("📞 문제가 지속되면 시스템 관리자에게 문의하세요.")
+                        logger.error(f"공고 수정 실패 - ID: {pblancId}, Error: {e}")
+                    
+                    finally:
+                        # 진행 상태 UI 정리
+                        time.sleep(1)
+                        progress_bar.empty()
+                        status_text.empty()
         
         with submit_col2:
             if st.form_submit_button("❌ 취소", type="secondary"):
@@ -357,4 +447,5 @@ def edit_announcement(announcement_id: str, current_data):
                 st.rerun()
         
         with submit_col3:
-            st.caption("* 표시된 항목은 필수 입력 사항입니다.") 
+            st.caption("* 표시된 항목은 필수 입력 사항입니다.")
+            st.caption("💡 수정 시 AI 검색 시스템도 자동으로 업데이트됩니다.") 

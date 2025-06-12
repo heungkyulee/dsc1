@@ -3,6 +3,7 @@ import os
 import re
 from datetime import datetime
 import uuid
+import shutil
 
 # --- 파일 경로 ---
 RAW_DATA_FILE = "kstartup_contest_info.json"
@@ -104,7 +105,7 @@ def process_raw_data():
     """
     raw_data = load_json(RAW_DATA_FILE)
     if not raw_data:
-        print(f"[정보] {RAW_DATA_FILE} 파일이 비어있거나 찾을 수 없습니다. 처리를 건너<0xEB><0x9B><0x81>니다.")
+        print(f"[정보] {RAW_DATA_FILE} 파일이 비어있거나 찾을 수 없습니다. 처리를 건너뜁니다.")
         return False
 
     organizations = load_json(ORGS_FILE)
@@ -128,7 +129,7 @@ def process_raw_data():
         org_name = ann_data.get("공고기관") or ann_data.get("기관명")
 
         if not org_name:
-            print(f"[경고] 공고 {pbancSn}의 기관명을 찾을 수 없습니다. 건너<0xEB><0x9B><0x81>니다.")
+            print(f"[경고] 공고 {pbancSn}의 기관명을 찾을 수 없습니다. 건너뜁니다.")
             continue
 
         # 1. 기관 정보 처리
@@ -353,52 +354,242 @@ all_contests_data = []
 
 def load_all_data():
     """
-    kstartup_contest_info.json 파일에서 모든 공고 데이터를 로드하여 all_contests_data에 저장합니다.
-    파일이 없거나 비어있으면 빈 리스트로 초기화합니다.
-    JSON 최상위 구조가 딕셔너리인 경우 값의 리스트로 변환합니다.
+    JSON 파일들에서 모든 공고 데이터를 로드하여 all_contests_data에 저장합니다.
+    announcements.json이 더 많은 데이터를 가지고 있으면 우선적으로 사용합니다.
     """
     global all_contests_data
+    
+    print("\n[LOAD] ==================== 데이터 로드 시작 ====================")
+    
+    # 백업 파일들 확인
+    backup_files = [f for f in os.listdir('.') if f.startswith(f"{DATA_FILE}.backup.")]
+    if backup_files:
+        print(f"[LOAD] 백업 파일 {len(backup_files)}개 발견")
+    
+    # 1. kstartup_contest_info.json 로드 시도
+    contest_data = []
+    contest_file_error = None
+    
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 content = f.read()
-                if not content.strip(): # 파일 내용이 비어있는 경우
-                    all_contests_data = []
-                else:
+                if content.strip():
                     loaded_json = json.loads(content)
                     if isinstance(loaded_json, dict):
-                        all_contests_data = list(loaded_json.values()) # 딕셔너리면 값들의 리스트로 변환
+                        contest_data = list(loaded_json.values())
                     elif isinstance(loaded_json, list):
-                        all_contests_data = loaded_json # 이미 리스트면 그대로 사용
-                    else:
-                        # 예상치 못한 형식이거나, 혹은 단일 객체가 파일 전체일 경우
-                        print(f"[경고] {DATA_FILE} 내용이 예상치 못한 형식입니다. ({type(loaded_json)})")
-                        all_contests_data = [] 
-        except json.JSONDecodeError:
-            all_contests_data = [] # JSON 파싱 오류 시 빈 리스트로 초기화
+                        contest_data = loaded_json
+                    print(f"[LOAD] kstartup_contest_info.json에서 {len(contest_data)}개 항목 로드")
+                else:
+                    print(f"[LOAD] {DATA_FILE}이 비어있음")
         except Exception as e:
-            print(f"데이터 로딩 중 오류 발생: {e}")
-            all_contests_data = []
+            contest_file_error = e
+            print(f"[LOAD] {DATA_FILE} 로드 실패: {e}")
+            
+            # 백업에서 복구 시도
+            if backup_files:
+                print(f"[RECOVERY] 백업에서 복구 시도...")
+                latest_backup = sorted(backup_files)[-1]
+                try:
+                    with open(latest_backup, 'r', encoding='utf-8') as f:
+                        backup_content = json.load(f)
+                        if isinstance(backup_content, dict):
+                            contest_data = list(backup_content.values())
+                        elif isinstance(backup_content, list):
+                            contest_data = backup_content
+                        print(f"[RECOVERY] 백업에서 {len(contest_data)}개 항목 복구 성공: {latest_backup}")
+                except Exception as backup_error:
+                    print(f"[RECOVERY] 백업 복구 실패: {backup_error}")
+    
+    # 2. announcements.json 로드 시도 (더 많은 데이터가 있을 가능성)
+    announcements_data = []
+    announcements_file_error = None
+    
+    if os.path.exists(ANNS_FILE):
+        try:
+            announcements_dict = load_json(ANNS_FILE, default={})
+            if announcements_dict:
+                announcements_data = list(announcements_dict.values())
+                print(f"[LOAD] announcements.json에서 {len(announcements_data)}개 항목 로드")
+        except Exception as e:
+            announcements_file_error = e
+            print(f"[LOAD] {ANNS_FILE} 로드 실패: {e}")
+    
+    # 3. 더 많은 데이터를 가진 소스 선택
+    if len(announcements_data) > len(contest_data):
+        print(f"[LOAD] announcements.json이 더 많은 데이터를 가지고 있음 ({len(announcements_data)} vs {len(contest_data)})")
+        all_contests_data = announcements_data
+        
+        # kstartup_contest_info.json을 announcements.json과 동기화
+        if len(contest_data) < len(announcements_data):
+            try:
+                print(f"[SYNC] kstartup_contest_info.json을 announcements.json과 동기화 중...")
+                sync_data = {}
+                
+                for i, item in enumerate(all_contests_data):
+                    if item and isinstance(item, dict):
+                        pblancId = item.get('pblancId', f"AUTO_ID_{i}")
+                        if not pblancId or pblancId == 'N/A':
+                            pblancId = str(uuid.uuid4())
+                            item['pblancId'] = pblancId
+                        sync_data[str(pblancId)] = item
+                
+                # 백업 생성 후 동기화
+                if os.path.exists(DATA_FILE):
+                    backup_file = f"{DATA_FILE}.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    shutil.copy2(DATA_FILE, backup_file)
+                    print(f"[SYNC] 동기화 전 백업 생성: {backup_file}")
+                
+                with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(sync_data, f, ensure_ascii=False, indent=2)
+                
+                print(f"[SYNC] 동기화 완료: {len(sync_data)}개 항목")
+                
+            except Exception as e:
+                print(f"[SYNC] 동기화 실패: {e}")
+    
+    elif len(contest_data) > 0:
+        print(f"[LOAD] kstartup_contest_info.json 사용 ({len(contest_data)}개 항목)")
+        all_contests_data = contest_data
+    
     else:
+        print(f"[LOAD] 모든 데이터 파일이 비어있음")
         all_contests_data = []
+        
+        # 긴급 복구: 백업 파일에서 로드 시도
+        if backup_files and (contest_file_error or announcements_file_error):
+            print(f"[EMERGENCY] 긴급 복구 시도...")
+            for backup_file in sorted(backup_files, reverse=True):  # 최신 백업부터
+                try:
+                    with open(backup_file, 'r', encoding='utf-8') as f:
+                        backup_data = json.load(f)
+                        if isinstance(backup_data, dict) and backup_data:
+                            all_contests_data = list(backup_data.values())
+                            print(f"[EMERGENCY] 긴급 복구 성공: {backup_file}에서 {len(all_contests_data)}개 항목")
+                            break
+                except Exception as emergency_error:
+                    print(f"[EMERGENCY] {backup_file} 복구 실패: {emergency_error}")
+    
+    print(f"[LOAD] 최종 로드된 데이터: {len(all_contests_data)}개 항목")
+    
+    # 4. 데이터 검증 및 정리
+    valid_data = []
+    fixed_count = 0
+    
+    for i, item in enumerate(all_contests_data):
+        if isinstance(item, dict) and item.get('title'):  # 최소한 제목이 있는 데이터만
+            # pblancId가 없거나 유효하지 않으면 생성
+            if 'pblancId' not in item or not item['pblancId'] or item['pblancId'] == 'N/A':
+                item['pblancId'] = str(uuid.uuid4())
+                fixed_count += 1
+            valid_data.append(item)
+    
+    all_contests_data = valid_data
+    
+    print(f"[LOAD] 검증 후 유효한 데이터: {len(all_contests_data)}개 항목")
+    if fixed_count > 0:
+        print(f"[LOAD] pblancId 자동 수정: {fixed_count}개 항목")
+    
+    # 5. 데이터 무결성 최종 검증
+    if len(all_contests_data) == 0:
+        print(f"[WARNING] 로드된 데이터가 없습니다!")
+    elif len(all_contests_data) < 10:
+        print(f"[WARNING] 로드된 데이터가 예상보다 적습니다 ({len(all_contests_data)}개)")
+    else:
+        print(f"[SUCCESS] 데이터 로드 성공")
+    
+    print(f"[LOAD] ==================== 데이터 로드 완료 ====================\n")
+    
+    return len(all_contests_data)
 
 def save_all_data():
     """
-    all_contests_data의 내용을 kstartup_contest_info.json 파일에 저장합니다.
-    주의: crawler.py는 딕셔너리 형태로 저장하므로, 여기서 리스트를 저장하면
-    crawler.py의 load_existing_json()과의 호환성 문제가 생길 수 있습니다.
-    crawler.py도 리스트 형태로 저장하거나, 여기서 저장할 때 crawler.py의 형식에 맞춰야 합니다.
-    현재 crawler.py는 ID를 키로 하는 딕셔너리를 저장합니다.
-    이 함수는 data_handler 내부에서 CRUD 작업 후 호출되므로, 
-    all_contests_data (리스트)를 다시 딕셔너리 형태로 변환하여 저장하는 것이 일관성에 좋습니다.
+    all_contests_data의 내용을 kstartup_contest_info.json 파일에 안전하게 저장합니다.
+    백업 생성 및 원자적 쓰기를 통해 데이터 손실을 방지합니다.
     """
     global all_contests_data
-    data_to_save = {item['pblancId']: item for item in all_contests_data if 'pblancId' in item}
+    
+    print(f"\n[SAVE] ==================== 데이터 저장 시작 ====================")
+    print(f"[SAVE] 저장할 데이터 수: {len(all_contests_data)}")
+    
+    # 1. 데이터 검증
+    if not all_contests_data:
+        print(f"[ERROR] 저장할 데이터가 없습니다. 저장을 중단합니다.")
+        return False
+    
+    # 2. 기존 파일 백업 생성
+    backup_created = False
+    if os.path.exists(DATA_FILE):
+        try:
+            backup_file = f"{DATA_FILE}.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            shutil.copy2(DATA_FILE, backup_file)
+            print(f"[SAVE] 백업 파일 생성: {backup_file}")
+            backup_created = True
+        except Exception as e:
+            print(f"[WARNING] 백업 생성 실패: {e}")
+    
+    # 3. 데이터 변환 (pblancId가 있는 항목만)
+    valid_data = {}
+    invalid_count = 0
+    
+    for item in all_contests_data:
+        if isinstance(item, dict) and 'pblancId' in item and item['pblancId']:
+            pblancId = str(item['pblancId'])
+            valid_data[pblancId] = item
+        else:
+            invalid_count += 1
+    
+    print(f"[SAVE] 유효한 데이터: {len(valid_data)}개")
+    if invalid_count > 0:
+        print(f"[WARNING] pblancId가 없는 데이터 {invalid_count}개 제외됨")
+    
+    # 4. 최소 데이터 수 검증 (기존 데이터가 10,000개 이상이었으므로)
+    if len(valid_data) < 100:  # 임계치 설정
+        print(f"[ERROR] 저장할 데이터가 너무 적습니다 ({len(valid_data)}개). 데이터 손실 방지를 위해 저장을 중단합니다.")
+        return False
+    
+    # 5. 임시 파일에 먼저 저장 (원자적 쓰기)
+    temp_file = f"{DATA_FILE}.tmp"
     try:
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=4)
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(valid_data, f, ensure_ascii=False, indent=2)
+        
+        # 6. 저장 성공 시 원본 파일로 이동
+        if os.path.exists(temp_file):
+            if os.path.exists(DATA_FILE):
+                os.remove(DATA_FILE)
+            os.rename(temp_file, DATA_FILE)
+            
+            print(f"[SAVE] 데이터 저장 완료: {len(valid_data)}개 항목")
+            print(f"[SAVE] ==================== 데이터 저장 완료 ====================\n")
+            return True
+        else:
+            print(f"[ERROR] 임시 파일 생성 실패")
+            return False
+            
     except Exception as e:
-        print(f"데이터 저장 중 오류 발생: {e}")
+        print(f"[ERROR] 데이터 저장 중 오류 발생: {e}")
+        
+        # 임시 파일 정리
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except:
+                pass
+        
+        # 백업에서 복구 시도
+        if backup_created:
+            try:
+                backup_files = [f for f in os.listdir('.') if f.startswith(f"{DATA_FILE}.backup.")]
+                if backup_files:
+                    latest_backup = sorted(backup_files)[-1]
+                    shutil.copy2(latest_backup, DATA_FILE)
+                    print(f"[RECOVERY] 백업에서 복구 완료: {latest_backup}")
+            except Exception as recovery_error:
+                print(f"[ERROR] 백업 복구 실패: {recovery_error}")
+        
+        return False
 
 def get_all_contests():
     """
@@ -428,66 +619,691 @@ def find_contest_by_id(contest_id):
 def add_contest(contest_data):
     """
     새로운 공고 데이터를 추가합니다.
-    공고 ID (pblancId)가 이미 존재하면 추가하지 않고 False를 반환합니다.
+    트랜잭션 방식으로 안전하게 저장하며, 실패 시 롤백됩니다.
     """
     global all_contests_data
-    if not all_contests_data: # load_all_data는 리스트를 가져옴
-        load_all_data()
+    
+    print(f"\n[ADD_CONTEST] ==================== 공고 추가 시작 ====================")
+    
+    # 1. 초기 데이터 로드
+    if not all_contests_data:
+        print(f"[ADD_CONTEST] 데이터 로드 중...")
+        loaded_count = load_all_data()
+        print(f"[ADD_CONTEST] 기존 데이터: {loaded_count}개")
 
+    original_data_count = len(all_contests_data)
+    
+    # 2. pblancId 자동 생성
     if 'pblancId' not in contest_data or not contest_data['pblancId']:
-        # UI에서 ID 입력을 강제하거나 여기서 생성 규칙 정의 필요
-        # 지금은 ID가 있다고 가정, 없으면 False 반환 또는 에러 발생
-        print("Error: pblancId is required to add a new contest.")
-        # contest_data['pblancId'] = str(uuid.uuid4()) # 임시 ID 생성 (정책에 따라)
-        return False
+        contest_data['pblancId'] = str(uuid.uuid4())
+        print(f"[ADD_CONTEST] 자동 생성된 ID: {contest_data['pblancId']}")
 
-    if find_contest_by_id(contest_data.get('pblancId')):
-        print(f"Error: Contest with ID {contest_data.get('pblancId')} already exists.")
+    # 3. 중복 검사
+    existing_contest = find_contest_by_id(contest_data.get('pblancId'))
+    if existing_contest:
+        print(f"[ERROR] ID {contest_data.get('pblancId')}가 이미 존재합니다.")
         return False
     
-    all_contests_data.append(contest_data) # 리스트에 추가
-    save_all_data() # 저장 시 딕셔너리로 변환됨
-    return True
+    # 4. 데이터 표준화
+    try:
+        standardized_data = _standardize_contest_data(contest_data)
+        print(f"[ADD_CONTEST] 데이터 표준화 완료")
+    except Exception as e:
+        print(f"[ERROR] 데이터 표준화 실패: {e}")
+        return False
+    
+    # 5. 메모리에 임시 추가 (롤백 가능한 상태)
+    all_contests_data.append(standardized_data)
+    print(f"[ADD_CONTEST] 메모리에 임시 추가 ({original_data_count} → {len(all_contests_data)})")
+    
+    try:
+        # 6. JSON 파일들에 저장
+        print(f"[ADD_CONTEST] JSON 파일 저장 시작...")
+        save_success = _save_to_json_files(standardized_data)
+        
+        if not save_success:
+            # 저장 실패 시 메모리에서 롤백
+            print(f"[ROLLBACK] JSON 저장 실패로 메모리에서 제거")
+            all_contests_data.pop()
+            print(f"[ROLLBACK] 메모리 롤백 완료 ({len(all_contests_data)}개)")
+            return False
+        
+        print(f"[ADD_CONTEST] JSON 파일 저장 완료")
+        
+        # 7. Pinecone 업데이트
+        print(f"[ADD_CONTEST] Pinecone 업데이트 시작...")
+        pinecone_success = _update_pinecone_single(standardized_data)
+        
+        if not pinecone_success:
+            print(f"[WARNING] Pinecone 업데이트 실패 (JSON 데이터는 저장됨)")
+        else:
+            print(f"[ADD_CONTEST] Pinecone 업데이트 완료")
+        
+        # 8. 성공 완료
+        print(f"[SUCCESS] 공고 추가 완료!")
+        print(f"[SUCCESS] - ID: {standardized_data['pblancId']}")
+        print(f"[SUCCESS] - 제목: {standardized_data.get('title', 'N/A')}")
+        print(f"[SUCCESS] - 전체 데이터 수: {len(all_contests_data)}")
+        print(f"[ADD_CONTEST] ==================== 공고 추가 완료 ====================\n")
+        
+        return True
+        
+    except Exception as e:
+        # 예외 발생 시 메모리에서 롤백
+        print(f"[ERROR] 예외 발생: {e}")
+        print(f"[ROLLBACK] 메모리에서 롤백 시도...")
+        
+        try:
+            if len(all_contests_data) > original_data_count:
+                all_contests_data.pop()
+                print(f"[ROLLBACK] 메모리 롤백 완료 ({len(all_contests_data)}개)")
+            else:
+                print(f"[ROLLBACK] 롤백할 데이터가 없음")
+        except Exception as rollback_error:
+            print(f"[ERROR] 롤백 중 오류: {rollback_error}")
+        
+        print(f"[ADD_CONTEST] ==================== 공고 추가 실패 ====================\n")
+        return False
+
+def _standardize_contest_data(contest_data):
+    """
+    새로 생성된 데이터를 기존 형식에 맞춰 표준화합니다.
+    """
+    current_time = datetime.now().isoformat()
+    
+    standardized = {
+        'pblancId': contest_data.get('pblancId'),
+        'title': contest_data.get('title', ''),
+        'org_name_ref': contest_data.get('organization', ''),
+        'support_field': contest_data.get('category', ''),
+        'region': contest_data.get('region', '전국'),
+        'target_audience': contest_data.get('target_audience', '제한 없음'),
+        'description': contest_data.get('description', ''),
+        'deadline': contest_data.get('deadline', ''),
+        'application_period': f"{datetime.now().strftime('%Y%m%d')} ~ {contest_data.get('deadline', '').replace('-', '')}",
+        'contact': contest_data.get('contact', ''),
+        'department': contest_data.get('organization', ''),
+        'announcement_date': datetime.now().strftime('%Y-%m-%d'),
+        'status': contest_data.get('status', 'active'),
+        'created_at': contest_data.get('created_at', current_time),
+        'updated_at': contest_data.get('updated_at', current_time),
+        'announcement_number': f"USER-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8]}",
+        'target_age': '',
+        'startup_experience': '',
+        'application_method': ['온라인 신청'],
+        'submission_documents': [],
+        'selection_procedure': [],
+        'support_content': contest_data.get('budget', ''),
+        'inquiry': [contest_data.get('contact', '')] if contest_data.get('contact') else [],
+        'attachments': []
+    }
+    
+    return standardized
+
+def _save_to_json_files(contest_data):
+    """
+    표준화된 데이터를 관련 JSON 파일들에 트랜잭션 방식으로 안전하게 저장합니다.
+    """
+    print(f"\n[SAVE_FILES] ==================== JSON 파일 저장 시작 ====================")
+    
+    success_operations = []
+    
+    try:
+        # 1. kstartup_contest_info.json에 저장 (전체 데이터)
+        print(f"[SAVE_FILES] 1. kstartup_contest_info.json 저장 중...")
+        save_result = save_all_data()
+        if save_result:
+            success_operations.append("kstartup_contest_info")
+            print(f"[SAVE_FILES] ✓ kstartup_contest_info.json 저장 완료")
+        else:
+            print(f"[SAVE_FILES] ✗ kstartup_contest_info.json 저장 실패")
+            return False
+        
+        # 2. announcements.json에 추가/업데이트
+        print(f"[SAVE_FILES] 2. announcements.json 업데이트 중...")
+        announcements = load_json(ANNS_FILE, default={})
+        original_count = len(announcements)
+        
+        announcements[str(contest_data['pblancId'])] = contest_data
+        save_json(announcements, ANNS_FILE)
+        success_operations.append("announcements")
+        
+        new_count = len(announcements)
+        print(f"[SAVE_FILES] ✓ announcements.json 업데이트 완료 ({original_count} → {new_count})")
+        
+        # 3. organizations.json 업데이트
+        print(f"[SAVE_FILES] 3. organizations.json 업데이트 중...")
+        organizations = load_json(ORGS_FILE, default={})
+        org_name = contest_data.get('org_name_ref', '')
+        
+        if org_name:
+            org_id = f"ORG_{org_name[:3].upper()}{len(org_name)}"
+            if org_id not in organizations:
+                organizations[org_id] = {
+                    "name": org_name,
+                    "type": "사용자 생성",
+                    "created_at": datetime.now().isoformat()
+                }
+                save_json(organizations, ORGS_FILE)
+                print(f"[SAVE_FILES] ✓ 새 기관 추가: {org_name}")
+            else:
+                print(f"[SAVE_FILES] ○ 기존 기관 사용: {org_name}")
+        
+        success_operations.append("organizations")
+        
+        # 4. index.json 업데이트
+        print(f"[SAVE_FILES] 4. index.json 업데이트 중...")
+        index = load_json(INDEX_FILE, default={
+            "title_keywords": {},
+            "organization_name": {},
+            "region": {},
+            "support_field": {},
+            "pbancSn_to_orgId": {}
+        })
+        
+        # 기존 인덱스에서 해당 ID 제거 (업데이트 시)
+        pblancId_str = str(contest_data['pblancId'])
+        for keyword_list in index["title_keywords"].values():
+            if pblancId_str in keyword_list:
+                keyword_list.remove(pblancId_str)
+        
+        # 새로운 키워드 인덱싱
+        title_tokens = tokenize(contest_data.get('title', ''))
+        for token in title_tokens:
+            if token not in index["title_keywords"]:
+                index["title_keywords"][token] = []
+            if pblancId_str not in index["title_keywords"][token]:
+                index["title_keywords"][token].append(pblancId_str)
+        
+        # 기관명 인덱싱
+        if org_name:
+            if org_name not in index["organization_name"]:
+                index["organization_name"][org_name] = []
+            if pblancId_str not in index["organization_name"][org_name]:
+                index["organization_name"][org_name].append(pblancId_str)
+        
+        # 지역 인덱싱
+        region = contest_data.get('region', '')
+        if region:
+            if region not in index["region"]:
+                index["region"][region] = []
+            if pblancId_str not in index["region"][region]:
+                index["region"][region].append(pblancId_str)
+        
+        # 지원분야 인덱싱
+        support_field = contest_data.get('support_field', '')
+        if support_field:
+            if support_field not in index["support_field"]:
+                index["support_field"][support_field] = []
+            if pblancId_str not in index["support_field"][support_field]:
+                index["support_field"][support_field].append(pblancId_str)
+        
+        save_json(index, INDEX_FILE)
+        success_operations.append("index")
+        print(f"[SAVE_FILES] ✓ index.json 업데이트 완료")
+        
+        print(f"[SAVE_FILES] ==================== JSON 파일 저장 완료 ====================\n")
+        return True
+        
+    except Exception as e:
+        print(f"[SAVE_FILES] ✗ JSON 파일 저장 중 오류: {e}")
+        print(f"[SAVE_FILES] 성공한 작업: {', '.join(success_operations)}")
+        print(f"[SAVE_FILES] ==================== JSON 파일 저장 실패 ====================\n")
+        return False
+
+def _update_pinecone_single(contest_data):
+    """
+    단일 공고 데이터를 Pinecone에 업데이트합니다.
+    """
+    try:
+        # RAG 시스템이 사용 가능한지 확인
+        try:
+            from rag_system import get_rag_chatbot
+            chatbot = get_rag_chatbot()
+            
+            if not chatbot.embedding_manager.model or not chatbot.pinecone_manager.index:
+                print("Warning: RAG 시스템이 초기화되지 않아 Pinecone 업데이트를 건너뜁니다.")
+                return False
+                
+        except ImportError:
+            print("Warning: RAG 시스템을 가져올 수 없어 Pinecone 업데이트를 건너뜁니다.")
+            return False
+        
+        # 텍스트 내용 구성
+        text_content = _build_text_for_embedding(contest_data)
+        
+        if not text_content.strip():
+            print("Warning: 임베딩할 텍스트 내용이 없습니다.")
+            return False
+        
+        # 임베딩 생성
+        embedding = chatbot.embedding_manager.create_embedding(text_content)
+        
+        # 메타데이터 구성
+        metadata = _build_metadata_for_pinecone(contest_data)
+        
+        # 벡터 데이터 구성
+        vector_id = f"announcement_{contest_data['pblancId']}"
+        vector_data = [{
+            "id": vector_id,
+            "values": embedding,
+            "metadata": metadata
+        }]
+        
+        # Pinecone에 업서트
+        success = chatbot.pinecone_manager.upsert_vectors(vector_data)
+        
+        if success:
+            print(f"Pinecone 업데이트 성공: {vector_id}")
+        else:
+            print(f"Pinecone 업데이트 실패: {vector_id}")
+            
+        return success
+        
+    except Exception as e:
+        print(f"Pinecone 업데이트 중 오류: {e}")
+        return False
+
+def _build_text_for_embedding(contest_data):
+    """
+    공고 데이터를 임베딩용 텍스트로 변환합니다.
+    """
+    text_parts = []
+    
+    # 제목
+    if contest_data.get('title'):
+        text_parts.append(f"제목: {contest_data['title']}")
+    
+    # 기관
+    if contest_data.get('org_name_ref'):
+        text_parts.append(f"기관: {contest_data['org_name_ref']}")
+    
+    # 분야
+    if contest_data.get('support_field'):
+        text_parts.append(f"분야: {contest_data['support_field']}")
+    
+    # 대상
+    if contest_data.get('target_audience'):
+        text_parts.append(f"대상: {contest_data['target_audience']}")
+    
+    # 지역
+    if contest_data.get('region'):
+        text_parts.append(f"지역: {contest_data['region']}")
+    
+    # 설명
+    if contest_data.get('description'):
+        description_short = contest_data['description'][:500] if len(contest_data['description']) > 500 else contest_data['description']
+        text_parts.append(f"설명: {description_short}")
+    
+    # 지원내용
+    if contest_data.get('support_content'):
+        text_parts.append(f"지원내용: {contest_data['support_content']}")
+    
+    # 마감일
+    if contest_data.get('deadline'):
+        text_parts.append(f"마감일: {contest_data['deadline']}")
+    
+    return " | ".join(text_parts)
+
+def _build_metadata_for_pinecone(contest_data):
+    """
+    공고 데이터를 Pinecone 메타데이터로 변환합니다.
+    """
+    return {
+        "title": contest_data.get('title', '제목 없음'),
+        "organization": contest_data.get('org_name_ref', '기관 정보 없음'),
+        "support_field": contest_data.get('support_field', '분야 정보 없음'),
+        "target_audience": contest_data.get('target_audience', '대상 정보 없음'),
+        "region": contest_data.get('region', '지역 정보 없음'),
+        "deadline": contest_data.get('deadline', ''),
+        "description": contest_data.get('description', '')[:1000] if contest_data.get('description') else '',
+        "contact": contest_data.get('contact', ''),
+        "application_period": contest_data.get('application_period', ''),
+        "announcement_date": contest_data.get('announcement_date', ''),
+        "status": contest_data.get('status', 'active'),
+        "data_source": "user_created"
+    }
 
 def update_contest(contest_id, updated_data):
     """
-    기존 공고 데이터를 수정합니다.
-    contest_id (pblancId)를 사용하여 공고를 찾고, updated_data로 내용을 업데이트합니다.
+    기존 공고 데이터를 수정합니다. (완전 재구현)
+    contest_id를 여러 방법으로 찾아 데이터를 업데이트합니다.
     """
     global all_contests_data
+    
+    # 강제로 최신 데이터 로드
+    load_all_data()
+    
     if not all_contests_data:
-        load_all_data()
+        print(f"[ERROR] 전체 데이터가 비어있습니다.")
+        return False
     
     str_contest_id = str(contest_id)
-    for index, contest in enumerate(all_contests_data): # 리스트 순회
-        if 'pblancId' in contest and str(contest['pblancId']) == str_contest_id:
-            original_id = contest['pblancId']
-            all_contests_data[index].update(updated_data)
-            all_contests_data[index]['pblancId'] = original_id # ID 변경 방지
-            save_all_data()
-            return True
-    print(f"Error: Contest with ID {str_contest_id} not found for update.")
-    return False
+    print(f"\n[UPDATE] ==================== 수정 시작 ====================")
+    print(f"[UPDATE] 입력 ID: '{str_contest_id}'")
+    print(f"[UPDATE] 전체 데이터 수: {len(all_contests_data)}")
+    print(f"[UPDATE] 업데이트 필드: {list(updated_data.keys())}")
+    
+    # 첫 번째 데이터 샘플 확인
+    if all_contests_data:
+        sample = all_contests_data[0]
+        print(f"[UPDATE] 샘플 데이터 키: {list(sample.keys())[:15]}")
+        print(f"[UPDATE] 샘플 pblancId: '{sample.get('pblancId', 'N/A')}'")
+        print(f"[UPDATE] 샘플 title: '{sample.get('title', 'N/A')}'")
+    
+    # 모든 가능한 방법으로 데이터 찾기
+    found_index = None
+    found_data = None
+    search_method = None
+    
+    # === 방법 1: pblancId 필드로 정확히 매칭 ===
+    print(f"\n[SEARCH] 방법 1: pblancId 정확 매칭")
+    for idx, item in enumerate(all_contests_data):
+        item_id = item.get('pblancId')
+        if item_id is not None and str(item_id) == str_contest_id:
+            found_index = idx
+            found_data = item
+            search_method = f"pblancId 정확 매칭 (Index: {idx})"
+            print(f"[SEARCH] ✓ 방법 1 성공: Index {idx}, pblancId '{item_id}'")
+            break
+    
+    # === 방법 2: 숫자 인덱스로 직접 접근 ===
+    if found_index is None:
+        print(f"[SEARCH] 방법 2: 숫자 인덱스 접근")
+        try:
+            idx_num = int(str_contest_id)
+            if 0 <= idx_num < len(all_contests_data):
+                found_index = idx_num
+                found_data = all_contests_data[idx_num]
+                search_method = f"인덱스 직접 접근 (Index: {idx_num})"
+                print(f"[SEARCH] ✓ 방법 2 성공: Index {idx_num}")
+                print(f"[SEARCH] 해당 데이터 pblancId: '{found_data.get('pblancId', 'N/A')}'")
+            else:
+                print(f"[SEARCH] ✗ 방법 2 실패: 인덱스 {idx_num}이 범위를 벗어남")
+        except (ValueError, TypeError):
+            print(f"[SEARCH] ✗ 방법 2 실패: '{str_contest_id}'를 숫자로 변환 불가")
+    
+    # === 방법 3: 부분 문자열 매칭 (pblancId, title 등) ===
+    if found_index is None:
+        print(f"[SEARCH] 방법 3: 부분 문자열 매칭")
+        search_fields = ['pblancId', 'title', 'id']
+        for field in search_fields:
+            for idx, item in enumerate(all_contests_data):
+                field_value = item.get(field, '')
+                if field_value and str_contest_id in str(field_value):
+                    found_index = idx
+                    found_data = item
+                    search_method = f"{field} 필드 부분 매칭 (Index: {idx})"
+                    print(f"[SEARCH] ✓ 방법 3 성공: {field} 필드에서 '{field_value}' 매칭")
+                    break
+            if found_index is not None:
+                break
+    
+    # === 방법 4: UUID 형태 ID 매칭 ===
+    if found_index is None:
+        print(f"[SEARCH] 방법 4: UUID 형태 매칭")
+        for idx, item in enumerate(all_contests_data):
+            item_id = item.get('pblancId', '')
+            if item_id and len(str(item_id)) > 10 and str_contest_id in str(item_id):
+                found_index = idx
+                found_data = item
+                search_method = f"UUID 부분 매칭 (Index: {idx})"
+                print(f"[SEARCH] ✓ 방법 4 성공: UUID '{item_id}' 부분 매칭")
+                break
+    
+    # === 결과 확인 및 업데이트 ===
+    if found_index is not None and found_data is not None:
+        print(f"\n[SUCCESS] 데이터 찾기 성공!")
+        print(f"[SUCCESS] 검색 방법: {search_method}")
+        print(f"[SUCCESS] 인덱스: {found_index}")
+        print(f"[SUCCESS] 원본 pblancId: '{found_data.get('pblancId', 'N/A')}'")
+        print(f"[SUCCESS] 원본 title: '{found_data.get('title', 'N/A')}'")
+        
+        # 원본 ID 보존
+        original_pblancId = found_data.get('pblancId', str_contest_id)
+        
+        # 업데이트 시간 추가
+        updated_data['updated_at'] = datetime.now().isoformat()
+        
+        # 데이터 병합 (기존 데이터 보존하면서 새 데이터 추가)
+        merged_data = found_data.copy()
+        for key, value in updated_data.items():
+            if key != 'pblancId':  # ID는 변경하지 않음
+                merged_data[key] = value
+        merged_data['pblancId'] = original_pblancId  # ID 보존
+        
+        print(f"[UPDATE] 병합된 데이터 필드 수: {len(merged_data)}")
+        print(f"[UPDATE] 변경된 필드: {[k for k in updated_data.keys() if k != 'updated_at']}")
+        
+        # 메모리 업데이트
+        all_contests_data[found_index] = merged_data
+        print(f"[UPDATE] 메모리 업데이트 완료")
+        
+        # JSON 파일 저장
+        try:
+            save_success = _save_to_json_files(merged_data)
+            if save_success:
+                print(f"[UPDATE] JSON 파일 저장 완료")
+            else:
+                print(f"[ERROR] JSON 파일 저장 실패")
+                return False
+        except Exception as e:
+            print(f"[ERROR] JSON 파일 저장 중 오류: {e}")
+            return False
+        
+        # Pinecone 업데이트
+        try:
+            pinecone_success = _update_pinecone_single(merged_data)
+            if pinecone_success:
+                print(f"[UPDATE] Pinecone 업데이트 완료")
+            else:
+                print(f"[WARNING] Pinecone 업데이트 실패 (JSON은 저장됨)")
+        except Exception as e:
+            print(f"[WARNING] Pinecone 업데이트 중 오류: {e}")
+        
+        print(f"[SUCCESS] ==================== 수정 완료 ====================\n")
+        return True
+    
+    else:
+        print(f"\n[FAILURE] ==================== 수정 실패 ====================")
+        print(f"[FAILURE] ID '{str_contest_id}'로 데이터를 찾을 수 없습니다.")
+        
+        # 디버깅을 위해 실제 저장된 ID들 출력
+        print(f"[DEBUG] 실제 저장된 ID들 (처음 10개):")
+        for i, item in enumerate(all_contests_data[:10]):
+            pblancId = item.get('pblancId', 'N/A')
+            title = item.get('title', 'N/A')[:30]
+            print(f"[DEBUG]   [{i}] pblancId: '{pblancId}', title: '{title}'")
+        
+        print(f"[FAILURE] ==========================================\n")
+        return False
 
 def delete_contest(contest_id):
     """
-    주어진 ID (pblancId)를 가진 공고를 삭제합니다.
+    주어진 ID (pblancId)를 가진 공고를 안전하게 삭제합니다.
+    백업 생성 후 삭제하며, 실패 시 복구 가능합니다.
     """
     global all_contests_data
+    
+    print(f"\n[DELETE_CONTEST] ==================== 공고 삭제 시작 ====================")
+    
     if not all_contests_data:
+        print(f"[DELETE_CONTEST] 데이터 로드 중...")
         load_all_data()
 
     str_contest_id = str(contest_id)
     original_length = len(all_contests_data)
-    # 리스트 컴프리헨션으로 삭제
-    all_contests_data = [contest for contest in all_contests_data if not ('pblancId' in contest and str(contest['pblancId']) == str_contest_id)]
+    print(f"[DELETE_CONTEST] 삭제 대상 ID: {str_contest_id}")
+    print(f"[DELETE_CONTEST] 현재 데이터 수: {original_length}")
     
-    if len(all_contests_data) < original_length:
-        save_all_data()
+    # 1. 삭제할 데이터 찾기 및 백업
+    deleted_data = None
+    deleted_index = None
+    
+    for idx, contest in enumerate(all_contests_data):
+        if 'pblancId' in contest and str(contest['pblancId']) == str_contest_id:
+            deleted_data = contest.copy()  # 백업용 복사본
+            deleted_index = idx
+            print(f"[DELETE_CONTEST] 삭제 대상 발견: {contest.get('title', 'N/A')}")
+            break
+    
+    if deleted_data is None:
+        print(f"[ERROR] ID {str_contest_id}를 가진 공고를 찾을 수 없습니다.")
+        print(f"[DELETE_CONTEST] ==================== 공고 삭제 실패 ====================\n")
+        return False
+    
+    try:
+        # 2. 메모리에서 제거
+        all_contests_data.pop(deleted_index)
+        print(f"[DELETE_CONTEST] 메모리에서 제거 완료 ({original_length} → {len(all_contests_data)})")
+        
+        # 3. JSON 파일들 업데이트
+        print(f"[DELETE_CONTEST] JSON 파일 업데이트 시작...")
+        
+        # 3-1. kstartup_contest_info.json 업데이트
+        save_result = save_all_data()
+        if not save_result:
+            raise Exception("kstartup_contest_info.json 저장 실패")
+        
+        # 3-2. announcements.json에서 삭제
+        try:
+            announcements = load_json(ANNS_FILE, default={})
+            if str_contest_id in announcements:
+                del announcements[str_contest_id]
+                save_json(announcements, ANNS_FILE)
+                print(f"[DELETE_CONTEST] announcements.json에서 제거 완료")
+            else:
+                print(f"[WARNING] announcements.json에 ID {str_contest_id}가 없음")
+        except Exception as e:
+            print(f"[WARNING] announcements.json 업데이트 실패: {e}")
+        
+        # 3-3. index.json에서 관련 인덱스 정리
+        try:
+            index = load_json(INDEX_FILE, default={
+                "title_keywords": {},
+                "organization_name": {},
+                "region": {},
+                "support_field": {},
+                "pbancSn_to_orgId": {}
+            })
+            
+            # 모든 인덱스에서 해당 ID 제거
+            index_updated = False
+            
+            # 키워드 인덱스 정리
+            for keyword, id_list in list(index["title_keywords"].items()):
+                if str_contest_id in id_list:
+                    id_list.remove(str_contest_id)
+                    index_updated = True
+                    if not id_list:  # 빈 리스트이면 키워드 자체 제거
+                        del index["title_keywords"][keyword]
+            
+            # 기관명 인덱스 정리
+            for org_name, id_list in list(index["organization_name"].items()):
+                if str_contest_id in id_list:
+                    id_list.remove(str_contest_id)
+                    index_updated = True
+                    if not id_list:
+                        del index["organization_name"][org_name]
+            
+            # 지역 인덱스 정리
+            for region, id_list in list(index["region"].items()):
+                if str_contest_id in id_list:
+                    id_list.remove(str_contest_id)
+                    index_updated = True
+                    if not id_list:
+                        del index["region"][region]
+            
+            # 지원분야 인덱스 정리
+            for field, id_list in list(index["support_field"].items()):
+                if str_contest_id in id_list:
+                    id_list.remove(str_contest_id)
+                    index_updated = True
+                    if not id_list:
+                        del index["support_field"][field]
+            
+            # pbancSn_to_orgId 인덱스 정리
+            if str_contest_id in index["pbancSn_to_orgId"]:
+                del index["pbancSn_to_orgId"][str_contest_id]
+                index_updated = True
+            
+            if index_updated:
+                save_json(index, INDEX_FILE)
+                print(f"[DELETE_CONTEST] index.json 정리 완료")
+            else:
+                print(f"[DELETE_CONTEST] index.json에 변경사항 없음")
+                
+        except Exception as e:
+            print(f"[WARNING] index.json 업데이트 실패: {e}")
+        
+        # 4. Pinecone에서 삭제
+        print(f"[DELETE_CONTEST] Pinecone에서 삭제 시도...")
+        pinecone_success = _delete_from_pinecone(str_contest_id)
+        if not pinecone_success:
+            print(f"[WARNING] Pinecone 삭제 실패 (JSON 데이터는 삭제됨)")
+        else:
+            print(f"[DELETE_CONTEST] Pinecone 삭제 완료")
+        
+        # 5. 성공 완료
+        print(f"[SUCCESS] 공고 삭제 완료!")
+        print(f"[SUCCESS] - 삭제된 ID: {str_contest_id}")
+        print(f"[SUCCESS] - 삭제된 제목: {deleted_data.get('title', 'N/A')}")
+        print(f"[SUCCESS] - 남은 데이터 수: {len(all_contests_data)}")
+        print(f"[DELETE_CONTEST] ==================== 공고 삭제 완료 ====================\n")
+        
         return True
-    
-    print(f"Error: Contest with ID {str_contest_id} not found for deletion.")
-    return False
+        
+    except Exception as e:
+        # 오류 발생 시 메모리 복구
+        print(f"[ERROR] 삭제 중 오류 발생: {e}")
+        print(f"[RECOVERY] 메모리 복구 시도...")
+        
+        try:
+            if deleted_data and deleted_index is not None:
+                all_contests_data.insert(deleted_index, deleted_data)
+                print(f"[RECOVERY] 메모리 복구 완료 ({len(all_contests_data)}개)")
+            else:
+                print(f"[ERROR] 복구할 데이터가 없음")
+        except Exception as recovery_error:
+            print(f"[ERROR] 메모리 복구 실패: {recovery_error}")
+        
+        print(f"[DELETE_CONTEST] ==================== 공고 삭제 실패 ====================\n")
+        return False
+
+def _delete_from_pinecone(contest_id):
+    """
+    Pinecone에서 공고 데이터를 삭제합니다.
+    """
+    try:
+        # RAG 시스템이 사용 가능한지 확인
+        try:
+            from rag_system import get_rag_chatbot
+            chatbot = get_rag_chatbot()
+            
+            if not chatbot.pinecone_manager.index:
+                print("Warning: Pinecone 인덱스가 초기화되지 않아 삭제를 건너뜁니다.")
+                return False
+                
+        except ImportError:
+            print("Warning: RAG 시스템을 가져올 수 없어 Pinecone 삭제를 건너뜁니다.")
+            return False
+        
+        # 벡터 ID 구성
+        vector_id = f"announcement_{contest_id}"
+        
+        # Pinecone에서 삭제
+        success = chatbot.pinecone_manager.delete_vectors([vector_id])
+        
+        if success:
+            print(f"Pinecone 삭제 성공: {vector_id}")
+        else:
+            print(f"Pinecone 삭제 실패: {vector_id}")
+            
+        return success
+        
+    except Exception as e:
+        print(f"Pinecone 삭제 중 오류: {e}")
+        return False
 
 def search_contests(keyword, search_fields=None):
     """
@@ -510,7 +1326,7 @@ def search_contests(keyword, search_fields=None):
         else: # 데이터가 없으면 검색 불가
             return []
             
-    for contest in all_contests_data: # 리스트 순회
+    for contest in all_contests_data:
         for field in effective_search_fields:
             if field in contest and isinstance(contest[field], str):
                 if lower_keyword in contest[field].lower():

@@ -446,25 +446,16 @@ def main():
         st.markdown("---")
         st.markdown("### 💡 시스템 정보")
         
-        info_col1, info_col2, info_col3 = st.columns(3)
+        info_col1, info_col2 = st.columns(2)
         
         with info_col1:
             st.markdown("""
-            **📈 실시간 업데이트**
-            - 5분마다 자동 새로고침
+            **📈 데이터 관리**
             - K-Startup API 연동
             - 실시간 상태 모니터링
             """)
         
         with info_col2:
-            st.markdown("""
-            **🔍 고급 기능**
-            - 다중 키워드 검색
-            - 스마트 필터링
-            - 카테고리별 분류
-            """)
-        
-        with info_col3:
             st.markdown("""
             **🤖 AI 지원**
             - RAG 기반 챗봇

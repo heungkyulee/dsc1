@@ -45,27 +45,25 @@ def main():
         
         # 페이지 헤더
         st.title("➕ 신규 지원사업 생성")
-        st.markdown("### 새로운 지원사업 정보를 등록하여 창업 생태계를 확장하세요")
-        st.markdown("---")
         
         # 도움말 섹션
-        with st.expander("📝 작성 가이드", expanded=False):
-            st.markdown("""
-            **필수 입력 항목** (⭐ 표시)
-            - **제목**: 명확하고 간결한 지원사업명
-            - **주관기관**: 지원사업을 주관하는 기관명
-            - **지원분야**: 해당하는 지원 분야 선택
-            - **신청마감일**: 지원자가 신청할 수 있는 마지막 날짜
-            - **상세설명**: 지원사업의 목적, 내용, 신청방법 등
+        # with st.expander("📝 작성 가이드", expanded=False):
+        #     st.markdown("""
+        #     **필수 입력 항목** (⭐ 표시)
+        #     - **제목**: 명확하고 간결한 지원사업명
+        #     - **주관기관**: 지원사업을 주관하는 기관명
+        #     - **지원분야**: 해당하는 지원 분야 선택
+        #     - **신청마감일**: 지원자가 신청할 수 있는 마지막 날짜
+        #     - **상세설명**: 지원사업의 목적, 내용, 신청방법 등
             
-            **작성 팁**
-            - 📋 명확하고 구체적인 정보 제공
-            - 🎯 지원 대상을 명확히 기술
-            - 💰 지원 금액과 조건을 상세히 설명
-            - 📞 문의처 정보를 정확히 입력
-            """)
+        #     **작성 팁**
+        #     - 📋 명확하고 구체적인 정보 제공
+        #     - 🎯 지원 대상을 명확히 기술
+        #     - 💰 지원 금액과 조건을 상세히 설명
+        #     - 📞 문의처 정보를 정확히 입력
+        #     """)
         
-        st.markdown("---")
+        # st.markdown("---")
         
         with st.form("create_announcement_form"):
             col1, col2 = st.columns(2)
@@ -139,8 +137,15 @@ def main():
                 if missing_fields:
                     st.error(f"다음 필수 항목을 입력해주세요: {', '.join(missing_fields)}")
                 else:
+                    # 진행 상태 표시
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
                     try:
-                        # 데이터 구성
+                        # 1단계: 데이터 구성
+                        status_text.text("📝 데이터 구성 중...")
+                        progress_bar.progress(25)
+                        
                         new_announcement = {
                             "title": title,
                             "organization": organization,
@@ -156,61 +161,95 @@ def main():
                             "updated_at": datetime.now().isoformat()
                         }
                         
-                        # 데이터 저장
+                        # 2단계: JSON 파일 저장
+                        status_text.text("💾 JSON 파일에 저장 중...")
+                        progress_bar.progress(50)
+                        
                         success = data_handler.add_contest(new_announcement)
                         
                         if success:
+                            # 3단계: Pinecone 업데이트 (add_contest 함수 내부에서 자동 처리)
+                            status_text.text("🔄 AI 검색 시스템 업데이트 중...")
+                            progress_bar.progress(75)
+                            
+                            # 4단계: 완료
+                            status_text.text("✅ 생성 완료!")
+                            progress_bar.progress(100)
+                            
+                            # 성공 메시지
                             st.success("✅ 지원사업이 성공적으로 생성되었습니다!")
                             st.balloons()
                             
                             # 캐시 초기화
-                            st.cache_data.clear()
+                            if hasattr(st, 'cache_data'):
+                                st.cache_data.clear()
                             
                             # 로깅
                             log_user_action("create_announcement", details={
                                 "title": title,
-                                "organization": organization
+                                "organization": organization,
+                                "id": new_announcement.get('pblancId', 'unknown')
                             })
                             
-                            # 성공 메시지와 함께 네비게이션 안내
-                            st.info("💡 왼쪽 사이드바에서 '🔍 지원사업 검색 및 필터링' 페이지로 이동하여 생성된 지원사업을 확인할 수 있습니다.")
-                            
+                            # 성공 후 정보
+                            with st.container():
+                                st.markdown("---")
+                                st.markdown("### 🎉 생성 완료!")
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.info("💡 **다음 단계:**\n- 왼쪽 사이드바에서 '🔍 지원사업 검색 및 필터링' 페이지로 이동하여 생성된 지원사업을 확인할 수 있습니다.")
+                                
+                                with col2:
+                                    st.success("🤖 **AI 챗봇 지원:**\n- '🤖 AI 챗봇' 페이지에서 생성한 지원사업에 대해 질문할 수 있습니다.")
+                        
                         else:
-                            st.error("❌ 지원사업 생성 중 오류가 발생했습니다.")
+                            status_text.text("❌ 저장 실패")
+                            progress_bar.progress(0)
+                            st.error("❌ 지원사업 생성 중 오류가 발생했습니다. 다시 시도해주세요.")
                     
                     except Exception as e:
-                        st.error(f"오류가 발생했습니다: {e}")
+                        status_text.text("❌ 오류 발생")
+                        progress_bar.progress(0)
+                        st.error(f"⚠️ 오류가 발생했습니다: {str(e)}")
+                        st.info("📞 문제가 지속되면 시스템 관리자에게 문의하세요.")
                         logger.error(f"지원사업 생성 실패: {e}")
+                    
+                    finally:
+                        # 진행 상태 UI 정리
+                        time.sleep(1)
+                        progress_bar.empty()
+                        status_text.empty()
         
-        # 하단 정보
-        st.markdown("---")
-        st.markdown("### 💡 추가 안내")
+        # # 하단 정보
+        # st.markdown("---")
+        # st.markdown("### 💡 추가 안내")
         
-        info_col1, info_col2, info_col3 = st.columns(3)
+        # info_col1, info_col2, info_col3 = st.columns(3)
         
-        with info_col1:
-            st.markdown("""
-            **📝 데이터 품질**
-            - 정확하고 최신 정보 입력
-            - 명확한 지원 조건 명시
-            - 연락처 정보 확인
-            """)
+        # with info_col1:
+        #     st.markdown("""
+        #     **📝 데이터 품질**
+        #     - 정확하고 최신 정보 입력
+        #     - 명확한 지원 조건 명시
+        #     - 연락처 정보 확인
+        #     """)
         
-        with info_col2:
-            st.markdown("""
-            **🔍 생성 후 관리**
-            - 검색 페이지에서 확인 가능
-            - 언제든지 수정/삭제 가능
-            - 실시간 상태 업데이트
-            """)
+        # with info_col2:
+        #     st.markdown("""
+        #     **🔍 생성 후 관리**
+        #     - 검색 페이지에서 확인 가능
+        #     - 언제든지 수정/삭제 가능
+        #     - 실시간 상태 업데이트
+        #     """)
         
-        with info_col3:
-            st.markdown("""
-            **🤖 AI 활용**
-            - 챗봇에서 자동 검색 가능
-            - 맞춤형 추천 서비스
-            - 스마트 필터링 지원
-            """)
+        # with info_col3:
+        #     st.markdown("""
+        #     **🤖 AI 활용**
+        #     - 챗봇에서 자동 검색 가능
+        #     - 맞춤형 추천 서비스
+        #     - 스마트 필터링 지원
+        #     """)
         
         # 사이드바 정보 렌더링
         render_sidebar_info()
