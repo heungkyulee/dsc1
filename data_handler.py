@@ -38,6 +38,53 @@ def save_json(data, filepath):
 
 # --- 데이터 처리 및 인덱싱 ---
 
+def extract_deadline_from_period(application_period):
+    """접수기간에서 마감일을 추출합니다. (YYYYMMDD ~ YYYYMMDD 형식)"""
+    if not application_period:
+        return None
+    
+    try:
+        # "20250602 ~ 20250620" 형식에서 마감일(끝 날짜) 추출
+        if '~' in application_period:
+            parts = application_period.split('~')
+            if len(parts) >= 2:
+                end_date_str = parts[1].strip()
+                # YYYYMMDD 형식을 YYYY-MM-DD로 변환
+                if len(end_date_str) == 8 and end_date_str.isdigit():
+                    year = end_date_str[:4]
+                    month = end_date_str[4:6]
+                    day = end_date_str[6:8]
+                    return f"{year}-{month}-{day}"
+        
+        # 단일 날짜인 경우 (YYYYMMDD)
+        elif len(application_period.strip()) == 8 and application_period.strip().isdigit():
+            date_str = application_period.strip()
+            year = date_str[:4]
+            month = date_str[4:6]
+            day = date_str[6:8]
+            return f"{year}-{month}-{day}"
+            
+    except Exception as e:
+        print(f"[경고] 접수기간 파싱 오류 ({application_period}): {e}")
+    
+    return None
+
+def format_date_string(date_str):
+    """YYYYMMDD 형식의 날짜를 YYYY-MM-DD로 변환합니다."""
+    if not date_str:
+        return None
+    
+    try:
+        if len(date_str) == 8 and date_str.isdigit():
+            year = date_str[:4]
+            month = date_str[4:6]
+            day = date_str[6:8]
+            return f"{year}-{month}-{day}"
+    except Exception as e:
+        print(f"[경고] 날짜 형식 변환 오류 ({date_str}): {e}")
+    
+    return date_str  # 변환 실패 시 원본 반환
+
 def generate_org_id(org_name):
     """기관명으로부터 간단한 고유 ID를 생성합니다."""
     # 간단하게 앞 3글자 + 길이 사용 (중복 가능성 있음, 실제로는 더 정교한 방법 필요)
@@ -98,6 +145,14 @@ def process_raw_data():
             new_org_count += 1
 
         # 2. 공고 정보 처리
+        # 접수기간에서 마감일 추출
+        application_period = ann_data.get("접수기간", "")
+        deadline = extract_deadline_from_period(application_period)
+        
+        # 공고일자 처리
+        announcement_date = ann_data.get("공고일자", "")
+        formatted_announcement_date = format_date_string(announcement_date)
+        
         announcement_entry = {
             "title": ann_data.get("title", ""),
             "support_field": ann_data.get("지원분야", ""),
@@ -106,13 +161,14 @@ def process_raw_data():
             "org_id": org_id,
             "contact": ann_data.get("연락처", ""),
             "region": ann_data.get("지역", ""),
-            "application_period": ann_data.get("접수기간", ""),
+            "application_period": application_period,
+            "deadline": deadline,  # 추출된 마감일
             "startup_experience": ann_data.get("창업업력", ""),
             "target_audience": ann_data.get("대상", ""),
             "department": ann_data.get("담당부서", ""),
             "announcement_number": ann_data.get("공고번호", ""),
             "description": ann_data.get("공고설명", ""),
-            "announcement_date": ann_data.get("공고일자", ""),
+            "announcement_date": formatted_announcement_date,
             "application_method": ann_data.get("신청방법", []),
             "submission_documents": ann_data.get("제출서류", []),
             "selection_procedure": ann_data.get("선정절차", []),

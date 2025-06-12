@@ -131,8 +131,14 @@ class PineconeManager:
             return
         
         try:
+            logger.info(f"Pinecone 초기화 시작...")
+            logger.info(f"API 키: {config.PINECONE_API_KEY[:20]}...")
+            logger.info(f"인덱스명: {config.PINECONE_INDEX_NAME}")
+            logger.info(f"임베딩 차원: {self.embedding_dimension}")
+            
             # Pinecone 클라이언트 초기화
             self.client = Pinecone(api_key=config.PINECONE_API_KEY)
+            logger.info("Pinecone 클라이언트 초기화 완료")
             
             # 인덱스 존재 확인 및 생성
             self._ensure_index_exists()
@@ -141,8 +147,14 @@ class PineconeManager:
             self.index = self.client.Index(config.PINECONE_INDEX_NAME)
             logger.info(f"Pinecone 인덱스 '{config.PINECONE_INDEX_NAME}' 연결 완료")
             
+            # 연결 테스트
+            stats = self.index.describe_index_stats()
+            logger.info(f"인덱스 통계: {stats}")
+            
         except Exception as e:
             logger.error(f"Pinecone 초기화 실패: {e}")
+            logger.error(f"오류 상세: {type(e).__name__}: {str(e)}")
+            raise
     
     def _ensure_index_exists(self):
         """인덱스가 존재하지 않으면 생성"""
@@ -219,7 +231,7 @@ class PineconeManager:
             return False
     
     @monitor_performance
-    def search_similar(self, query_vector: List[float], top_k: int = 5, filter_dict: Optional[Dict] = None) -> List[Dict[str, Any]]:
+    def search_similar(self, query_vector: List[float], top_k: int = 30, filter_dict: Optional[Dict] = None) -> List[Dict[str, Any]]:
         """유사한 벡터 검색 (신청 가능한 지원사업 우선)"""
         if not self.index:
             logger.error("Pinecone 인덱스가 초기화되지 않았습니다.")
@@ -300,6 +312,112 @@ class PineconeManager:
         except Exception as e:
             logger.error(f"유사도 검색 실패: {e}")
             return []
+    
+    def _analyze_deadline_status(self, application_period: str) -> Dict[str, Any]:
+        """지원사업 마감일 분석 (YYYYMMDD 형식 포함)"""
+        try:
+            kst = timezone(timedelta(hours=9))
+            now = datetime.now(kst)
+            
+            # 접수기간에서 마감일 추출 시도
+            import re
+            
+            deadline_info = {
+                "status": "unknown",
+                "days_remaining": None,
+                "deadline_date": None,
+                "is_expired": False,
+                "is_urgent": False
+            }
+            
+            if not application_period:
+                return deadline_info
+            
+            # YYYYMMDD ~ YYYYMMDD 형식 우선 처리
+            yyyymmdd_pattern = r'(\d{8})\s*~\s*(\d{8})'
+            yyyymmdd_match = re.search(yyyymmdd_pattern, application_period)
+            
+            if yyyymmdd_match:
+                try:
+                    end_date_str = yyyymmdd_match.group(2)  # 마감일
+                    year = int(end_date_str[:4])
+                    month = int(end_date_str[4:6])
+                    day = int(end_date_str[6:8])
+                    
+                    deadline = datetime(year, month, day, 23, 59, 59, tzinfo=kst)
+                    days_diff = (deadline - now).days
+                    
+                    deadline_info.update({
+                        "deadline_date": deadline.strftime("%Y-%m-%d"),
+                        "days_remaining": days_diff,
+                        "is_expired": days_diff < 0,
+                        "is_urgent": 0 <= days_diff <= 3
+                    })
+                    
+                    if days_diff < 0:
+                        deadline_info["status"] = "expired"
+                    elif days_diff == 0:
+                        deadline_info["status"] = "today"
+                    elif days_diff <= 3:
+                        deadline_info["status"] = "urgent"
+                    elif days_diff <= 7:
+                        deadline_info["status"] = "soon"
+                    else:
+                        deadline_info["status"] = "active"
+                        
+                    return deadline_info
+                    
+                except ValueError:
+                    pass
+            
+            # YYYY.MM.DD 형식 처리
+            dot_pattern = r'(\d{4})\.(\d{1,2})\.(\d{1,2})\s*~\s*(\d{4})\.(\d{1,2})\.(\d{1,2})'
+            dot_match = re.search(dot_pattern, application_period)
+            
+            if dot_match:
+                try:
+                    year = int(dot_match.group(4))
+                    month = int(dot_match.group(5))
+                    day = int(dot_match.group(6))
+                    
+                    deadline = datetime(year, month, day, 23, 59, 59, tzinfo=kst)
+                    days_diff = (deadline - now).days
+                    
+                    deadline_info.update({
+                        "deadline_date": deadline.strftime("%Y-%m-%d"),
+                        "days_remaining": days_diff,
+                        "is_expired": days_diff < 0,
+                        "is_urgent": 0 <= days_diff <= 3
+                    })
+                    
+                    if days_diff < 0:
+                        deadline_info["status"] = "expired"
+                    elif days_diff == 0:
+                        deadline_info["status"] = "today"
+                    elif days_diff <= 3:
+                        deadline_info["status"] = "urgent"
+                    elif days_diff <= 7:
+                        deadline_info["status"] = "soon"
+                    else:
+                        deadline_info["status"] = "active"
+                        
+                    return deadline_info
+                    
+                except ValueError:
+                    pass
+            
+            # 기타 형식들도 시도할 수 있지만, 기본값 반환
+            return deadline_info
+            
+        except Exception as e:
+            logger.error(f"마감일 분석 실패: {e}")
+            return {
+                "status": "unknown",
+                "days_remaining": None,
+                "deadline_date": None,
+                "is_expired": False,
+                "is_urgent": False
+            }
     
     def _is_current_year_announcement(self, application_period: str, current_year: int) -> bool:
         """접수기간에서 현재 연도 지원사업인지 확인"""
@@ -418,7 +536,7 @@ class RAGChatbot:
                         "deadline_date": deadline.strftime("%Y-%m-%d"),
                         "days_remaining": days_diff,
                         "is_expired": days_diff < 0,
-                        "is_urgent": 0 <= days_diff <= 7
+                        "is_urgent": 0 <= days_diff <= 3
                     })
                     
                     if days_diff < 0:
@@ -431,56 +549,49 @@ class RAGChatbot:
                         deadline_info["status"] = "soon"
                     else:
                         deadline_info["status"] = "active"
-                    
+                        
                     return deadline_info
                     
-                except (ValueError, IndexError):
+                except ValueError:
                     pass
             
-            # 다른 날짜 형식 패턴들
-            date_patterns = [
-                r'(\d{4})[.-](\d{1,2})[.-](\d{1,2})',  # YYYY-MM-DD, YYYY.MM.DD
-                r'(\d{1,2})[./](\d{1,2})[./](\d{4})',  # MM/DD/YYYY, MM.DD.YYYY
-                r'(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일',  # YYYY년 MM월 DD일
-            ]
+            # YYYY.MM.DD 형식 처리
+            dot_pattern = r'(\d{4})\.(\d{1,2})\.(\d{1,2})\s*~\s*(\d{4})\.(\d{1,2})\.(\d{1,2})'
+            dot_match = re.search(dot_pattern, application_period)
             
-            # 마감일 추출
-            for pattern in date_patterns:
-                matches = re.findall(pattern, application_period)
-                if matches:
-                    # 가장 마지막 날짜를 마감일로 간주
-                    for match in reversed(matches):
-                        try:
-                            if len(match[0]) == 4:  # YYYY-MM-DD 형식
-                                year, month, day = int(match[0]), int(match[1]), int(match[2])
-                            else:  # MM/DD/YYYY 형식
-                                month, day, year = int(match[0]), int(match[1]), int(match[2])
-                            
-                            deadline = datetime(year, month, day, 23, 59, 59, tzinfo=kst)
-                            days_diff = (deadline - now).days
-                            
-                            deadline_info.update({
-                                "deadline_date": deadline.strftime("%Y-%m-%d"),
-                                "days_remaining": days_diff,
-                                "is_expired": days_diff < 0,
-                                "is_urgent": 0 <= days_diff <= 7
-                            })
-                            
-                            if days_diff < 0:
-                                deadline_info["status"] = "expired"
-                            elif days_diff == 0:
-                                deadline_info["status"] = "today"
-                            elif days_diff <= 3:
-                                deadline_info["status"] = "urgent"
-                            elif days_diff <= 7:
-                                deadline_info["status"] = "soon"
-                            else:
-                                deadline_info["status"] = "active"
-                            
-                            return deadline_info
-                        except (ValueError, IndexError):
-                            continue
+            if dot_match:
+                try:
+                    year = int(dot_match.group(4))
+                    month = int(dot_match.group(5))
+                    day = int(dot_match.group(6))
+                    
+                    deadline = datetime(year, month, day, 23, 59, 59, tzinfo=kst)
+                    days_diff = (deadline - now).days
+                    
+                    deadline_info.update({
+                        "deadline_date": deadline.strftime("%Y-%m-%d"),
+                        "days_remaining": days_diff,
+                        "is_expired": days_diff < 0,
+                        "is_urgent": 0 <= days_diff <= 3
+                    })
+                    
+                    if days_diff < 0:
+                        deadline_info["status"] = "expired"
+                    elif days_diff == 0:
+                        deadline_info["status"] = "today"
+                    elif days_diff <= 3:
+                        deadline_info["status"] = "urgent"
+                    elif days_diff <= 7:
+                        deadline_info["status"] = "soon"
+                    else:
+                        deadline_info["status"] = "active"
+                        
+                    return deadline_info
+                    
+                except ValueError:
+                    pass
             
+            # 기타 형식들도 시도할 수 있지만, 기본값 반환
             return deadline_info
             
         except Exception as e:
@@ -517,7 +628,7 @@ class RAGChatbot:
             query_embedding = self.embedding_manager.create_embedding(user_query)
             
             # 2. 신청 가능한 지원사업 우선 검색
-            search_results = self._search_with_application_priority(query_embedding, top_k=5)
+            search_results = self._search_with_application_priority(query_embedding, top_k=30)
             
             # 3. 컨텍스트 구성 (검색 결과 + 대화 기록)
             context = self._build_context(search_results)
@@ -707,65 +818,81 @@ class RAGChatbot:
             logger.error(f"OpenAI 메모리 응답 생성 실패: {e}")
             return self._generate_fallback_response(user_query, [])
     
-    def _search_with_application_priority(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    def _search_with_application_priority(self, query_vector: List[float], top_k: int = 30) -> List[Dict[str, Any]]:
         """신청 가능한 지원사업을 우선적으로 검색"""
         try:
-            # 1단계: 현재 연도 지원사업 우선 검색
-            current_year = datetime.now().year
-            current_date = datetime.now().strftime("%Y%m%d")
+            # 필터링 없이 전체 검색을 한 다음, 결과를 후처리로 정렬
+            # Pinecone 필터가 제대로 작동하지 않는 경우에 대비
             
-            # 현재 연도 필터로 먼저 검색 시도
-            year_filter = {
-                "announcement_date": {"$gte": f"{current_year}0101"}
-            }
-            
-            # 현재 연도 지원사업 검색
-            current_year_results = self.pinecone_manager.search_similar(
-                query_vector=query_vector,
-                top_k=top_k * 2,  # 2배 더 가져와서 필터링
-                filter_dict=year_filter
-            )
-            
-            # 신청 가능한 지원사업과 만료된 지원사업 분류
-            applicable_results = []
-            expired_results = []
-            
-            for result in current_year_results:
-                if result.get("is_applicable", False):
-                    applicable_results.append(result)
-                else:
-                    expired_results.append(result)
-            
-            # 신청 가능한 지원사업이 충분하면 그것만 반환
-            if len(applicable_results) >= top_k:
-                final_results = applicable_results[:top_k]
-                logger.info(f"신청 가능한 지원사업 {len(final_results)}개 우선 반환 (현재연도 필터 적용)")
-                return final_results
-            
-            # 2단계: 신청 가능한 지원사업이 부족하면 전체 검색으로 확장
-            logger.info(f"현재연도 신청가능 지원사업 부족 ({len(applicable_results)}개), 전체 검색으로 확장")
-            
+            # 더 많은 결과를 가져와서 후처리로 필터링
             all_results = self.pinecone_manager.search_similar(
                 query_vector=query_vector,
                 top_k=top_k * 4  # 4배 더 가져와서 필터링
             )
             
-            # 전체 결과에서 신청 가능한 것들 추가 수집
+            # 신청 가능한 지원사업과 만료된 지원사업 분류
+            applicable_results = []
+            expired_results = []
+            current_year_results = []
+            
+            current_year = datetime.now().year
+            
             for result in all_results:
-                if result.get("is_applicable", False) and result not in applicable_results:
+                # 현재 연도 지원사업인지 확인
+                is_current_year = result.get("is_current_year", False)
+                is_applicable = result.get("is_applicable", False)
+                
+                if is_current_year:
+                    current_year_results.append(result)
+                
+                if is_applicable:
                     applicable_results.append(result)
-                elif not result.get("is_applicable", False) and result not in expired_results:
+                else:
                     expired_results.append(result)
             
-            # 최종 결과 구성: 신청 가능한 것 우선, 부족하면 만료된 것도 포함 (참고용)
-            final_results = applicable_results[:top_k]
+            # 우선순위 정렬: 신청 가능 + 현재 연도 > 신청 가능 > 현재 연도 > 기타
+            def priority_sort_key(result):
+                is_applicable = result.get("is_applicable", False)
+                is_current_year = result.get("is_current_year", False)
+                deadline_status = result.get("deadline_status", {})
+                score = result.get("score", 0.0)
+                
+                # 우선순위 점수 계산
+                priority_score = 0
+                
+                if is_applicable and is_current_year:
+                    priority_score = 1000  # 최우선
+                elif is_applicable:
+                    priority_score = 500   # 신청 가능
+                elif is_current_year:
+                    priority_score = 100   # 현재 연도
+                else:
+                    priority_score = 10    # 기타
+                
+                # 긴급도 추가 점수
+                if deadline_status.get("status") == "today":
+                    priority_score += 200
+                elif deadline_status.get("status") == "urgent":
+                    priority_score += 100
+                elif deadline_status.get("status") == "soon":
+                    priority_score += 50
+                
+                return (-priority_score, -score)  # 높은 우선순위, 높은 점수 순
             
-            if len(final_results) < top_k:
-                remaining_slots = top_k - len(final_results)
-                final_results.extend(expired_results[:remaining_slots])
+            # 전체 결과를 우선순위로 정렬
+            all_results.sort(key=priority_sort_key)
             
-            logger.info(f"최종 검색 결과: 신청가능 {len([r for r in final_results if r.get('is_applicable', False)])}개, "
-                       f"만료 {len([r for r in final_results if not r.get('is_applicable', False)])}개")
+            # 상위 결과 선택
+            final_results = all_results[:top_k]
+            
+            # 통계 정보 계산
+            applicable_count = sum(1 for r in final_results if r.get("is_applicable", False))
+            current_year_count = sum(1 for r in final_results if r.get("is_current_year", False))
+            urgent_count = sum(1 for r in final_results 
+                             if r.get("deadline_status", {}).get("status") in ["today", "urgent"])
+            
+            logger.info(f"최종 검색 결과: 총 {len(final_results)}개 "
+                       f"(신청가능: {applicable_count}개, 현재연도: {current_year_count}개, 긴급: {urgent_count}개)")
             
             return final_results
             
@@ -894,20 +1021,31 @@ class RAGChatbot:
         return sources
     
     def _calculate_confidence(self, search_results: List[Dict[str, Any]]) -> float:
-        """응답 신뢰도 계산"""
+        """응답 신뢰도 계산 (Pinecone 코사인 유사도 기준)"""
         if not search_results:
             return 0.0
         
         # 가장 높은 유사도 점수를 기준으로 신뢰도 계산
         max_score = max(result.get("score", 0.0) for result in search_results)
         
-        # 0.8 이상이면 높은 신뢰도, 0.5 이하면 낮은 신뢰도
-        if max_score >= 0.8:
-            return min(max_score, 1.0)
-        elif max_score >= 0.5:
-            return max_score * 0.8
+        # Pinecone 코사인 유사도에 맞게 임계값 조정
+        # 0.6 이상: 매우 높은 신뢰도 (85-100%)
+        # 0.4-0.6: 높은 신뢰도 (60-85%)
+        # 0.2-0.4: 보통 신뢰도 (30-60%)
+        # 0.2 미만: 낮은 신뢰도 (0-30%)
+        
+        if max_score >= 0.6:
+            # 0.6 이상은 85-100% 신뢰도
+            return min(0.85 + (max_score - 0.6) * 0.375, 1.0)  # 0.6->85%, 1.0->100%
+        elif max_score >= 0.4:
+            # 0.4-0.6은 60-85% 신뢰도
+            return 0.6 + (max_score - 0.4) * 1.25  # 0.4->60%, 0.6->85%
+        elif max_score >= 0.2:
+            # 0.2-0.4는 30-60% 신뢰도
+            return 0.3 + (max_score - 0.2) * 1.5  # 0.2->30%, 0.4->60%
         else:
-            return max_score * 0.5
+            # 0.2 미만은 0-30% 신뢰도
+            return max_score * 1.5  # 0->0%, 0.2->30%
     
     def _add_to_chat_history(self, role: str, content: str):
         """대화 기록 추가"""
@@ -970,7 +1108,15 @@ def ingest_announcements_to_pinecone(announcements_data: Dict[str, Any]) -> Tupl
             return False, "임베딩 모델이 초기화되지 않았습니다."
         
         if not chatbot.pinecone_manager.index:
-            return False, "Pinecone 인덱스가 초기화되지 않았습니다."
+            # Pinecone 재초기화 시도
+            logger.info("Pinecone 인덱스가 초기화되지 않아 재초기화를 시도합니다...")
+            try:
+                chatbot.pinecone_manager._initialize_pinecone()
+                if not chatbot.pinecone_manager.index:
+                    return False, "Pinecone 인덱스 재초기화에 실패했습니다."
+                logger.info("Pinecone 인덱스 재초기화 성공")
+            except Exception as e:
+                return False, f"Pinecone 인덱스 재초기화 실패: {str(e)}"
         
         # 벡터 데이터 준비
         vectors_to_upsert = []
@@ -1113,6 +1259,16 @@ def _build_announcement_text(announcement: Dict[str, Any]) -> str:
     if application_period:
         text_parts.append(f"접수기간: {application_period}")
     
+    # 마감일 (추출된 마감일)
+    deadline = announcement.get('deadline', '')
+    if deadline:
+        text_parts.append(f"마감일: {deadline}")
+    
+    # 공고일자
+    announcement_date = announcement.get('announcement_date', '')
+    if announcement_date:
+        text_parts.append(f"공고일: {announcement_date}")
+    
     # 부서
     department = announcement.get('department', '')
     if department:
@@ -1169,6 +1325,7 @@ def _build_announcement_metadata(announcement: Dict[str, Any]) -> Dict[str, Any]
         # 지역 및 일정
         "region": announcement.get('region', '지역 정보 없음'),
         "application_period": announcement.get('application_period', '접수기간 정보 없음'),
+        "deadline": announcement.get('deadline', ''),  # 추출된 마감일
         "announcement_date": announcement.get('announcement_date', ''),
         "announcement_number": str(announcement.get('announcement_number', '')),
         

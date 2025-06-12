@@ -13,12 +13,12 @@ load_dotenv()
 class Config:
     """애플리케이션 설정 클래스"""
     
-    # API 키 설정
-    PINECONE_API_KEY: Optional[str] = os.getenv("PINECONE_API_KEY")
+    # API 키 설정 (환경변수 우선, 없으면 직접 설정값 사용)
+    PINECONE_API_KEY: Optional[str] = os.getenv("PINECONE_API_KEY") or "pcsk_33NTQh_RpshxHr1AXWeTxKMTpc52PxEVdBomgEQBDEpADVjzdZCFx9SXoiTyDbrEee21PZ"
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     
     # 벡터 데이터베이스 설정
-    PINECONE_ENVIRONMENT: str = os.getenv("PINECONE_ENVIRONMENT", "us-west1-gcp-free")
+    PINECONE_ENVIRONMENT: str = os.getenv("PINECONE_ENVIRONMENT", "us-east-1")
     PINECONE_INDEX_NAME: str = os.getenv("PINECONE_INDEX_NAME", "dsc1")
     EMBEDDING_DIMENSION: int = int(os.getenv("EMBEDDING_DIMENSION", "512"))
     
