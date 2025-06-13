@@ -24,7 +24,7 @@ K-Startup 지원사업 관리 시스템은 한국창업진흥원(K-Startup)의 �
 
 ```bash
 # 저장소 클론
-git clone <repository-url>
+git clone https://github.com/heungkyulee/dsc1
 cd dsc1
 
 # 가상환경 생성 및 활성화
