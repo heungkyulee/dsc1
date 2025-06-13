@@ -300,7 +300,7 @@ def find_announcements(keyword=None, org_name=None, region=None, support_field=N
 
 
 def update_announcement(pbancSn_str, updated_data):
-    """특정 공고 정보를 업데이트합니다. (Pinecone 업데이트 포함)"""
+    """특정 공고 정보를 업데이트합니다. (개선된 Pinecone 메타데이터 포함)"""
     try:
         # 1. JSON 파일 업데이트
         announcements = load_json(ANNS_FILE)
@@ -315,14 +315,47 @@ def update_announcement(pbancSn_str, updated_data):
         save_json(announcements, ANNS_FILE)
         print(f"[정보] 공고 {pbancSn_str} JSON 파일 업데이트 완료")
 
-        # 3. Pinecone 업데이트
+        # 3. 개선된 Pinecone 업데이트
         try:
-            from rag_system import ingest_announcements_to_pinecone
-            success, message = ingest_announcements_to_pinecone({pbancSn_str: announcements[pbancSn_str]})
-            if not success:
-                print(f"[경고] Pinecone 업데이트 실패: {message}")
-                return False
-            print(f"[정보] 공고 {pbancSn_str} Pinecone 업데이트 완료")
+            from rag_system import _build_announcement_text, _build_announcement_metadata, get_rag_chatbot
+            
+            # RAG 시스템 초기화 확인
+            chatbot = get_rag_chatbot()
+            if not chatbot.embedding_manager.model or not chatbot.pinecone_manager.index:
+                print(f"[경고] RAG 시스템이 초기화되지 않아 Pinecone 업데이트를 건너뜁니다.")
+                return True  # JSON 업데이트는 성공했으므로 True 반환
+            
+            # 업데이트된 데이터로 개선된 임베딩 및 메타데이터 생성
+            updated_contest_data = announcements[pbancSn_str]
+            
+            # 개선된 텍스트 내용 구성 (모든 메타데이터 포함)
+            text_content = _build_announcement_text(updated_contest_data)
+            
+            if text_content.strip():
+                # 임베딩 생성
+                embedding = chatbot.embedding_manager.create_embedding(text_content)
+                
+                # 개선된 메타데이터 구성 (확장된 정보 포함)
+                metadata = _build_announcement_metadata(updated_contest_data)
+                
+                # 벡터 데이터 구성
+                vector_id = f"announcement_{pbancSn_str}"
+                vector_data = [{
+                    "id": vector_id,
+                    "values": embedding,
+                    "metadata": metadata
+                }]
+                
+                # Pinecone에 업서트
+                success = chatbot.pinecone_manager.upsert_vectors(vector_data)
+                if success:
+                    print(f"[정보] 공고 {pbancSn_str} Pinecone 업데이트 완료 (개선된 메타데이터)")
+                else:
+                    print(f"[경고] 공고 {pbancSn_str} Pinecone 업데이트 실패")
+                    return False
+            else:
+                print(f"[경고] 임베딩할 텍스트 내용이 없어 Pinecone 업데이트를 건너뜁니다.")
+                
         except Exception as e:
             print(f"[경고] Pinecone 업데이트 중 오류: {e}")
             return False
@@ -724,7 +757,7 @@ def add_contest(contest_data):
 
 def _standardize_contest_data(contest_data):
     """
-    새로 생성된 데이터를 기존 형식에 맞춰 표준화합니다.
+    새로 생성된 데이터를 기존 형식에 맞춰 표준화합니다. (데이터 소스 정보 포함)
     """
     current_time = datetime.now().isoformat()
     
@@ -752,7 +785,11 @@ def _standardize_contest_data(contest_data):
         'selection_procedure': [],
         'support_content': contest_data.get('budget', ''),
         'inquiry': [contest_data.get('contact', '')] if contest_data.get('contact') else [],
-        'attachments': []
+        'attachments': [],
+        # 🔥 데이터 소스 정보 추가 (RAG 시스템에서 구분용)
+        'data_source': 'user_created',
+        'source_type': '사용자 생성',
+        'is_user_generated': True
     }
     
     return standardized
@@ -870,12 +907,12 @@ def _save_to_json_files(contest_data):
 
 def _update_pinecone_single(contest_data):
     """
-    단일 공고 데이터를 Pinecone에 업데이트합니다.
+    단일 공고 데이터를 Pinecone에 업데이트합니다. (개선된 메타데이터 사용)
     """
     try:
         # RAG 시스템이 사용 가능한지 확인
         try:
-            from rag_system import get_rag_chatbot
+            from rag_system import get_rag_chatbot, _build_announcement_text, _build_announcement_metadata
             chatbot = get_rag_chatbot()
             
             if not chatbot.embedding_manager.model or not chatbot.pinecone_manager.index:
@@ -886,8 +923,8 @@ def _update_pinecone_single(contest_data):
             print("Warning: RAG 시스템을 가져올 수 없어 Pinecone 업데이트를 건너뜁니다.")
             return False
         
-        # 텍스트 내용 구성
-        text_content = _build_text_for_embedding(contest_data)
+        # 개선된 텍스트 내용 구성 (모든 메타데이터 포함)
+        text_content = _build_announcement_text(contest_data)
         
         if not text_content.strip():
             print("Warning: 임베딩할 텍스트 내용이 없습니다.")
@@ -896,11 +933,11 @@ def _update_pinecone_single(contest_data):
         # 임베딩 생성
         embedding = chatbot.embedding_manager.create_embedding(text_content)
         
-        # 메타데이터 구성
-        metadata = _build_metadata_for_pinecone(contest_data)
+        # 개선된 메타데이터 구성 (확장된 정보 포함)
+        metadata = _build_announcement_metadata(contest_data)
         
         # 벡터 데이터 구성
-        vector_id = f"announcement_{contest_data['pblancId']}"
+        vector_id = f"announcement_{contest_data.get('pblancId', contest_data.get('id', 'unknown'))}"
         vector_data = [{
             "id": vector_id,
             "values": embedding,
@@ -920,66 +957,6 @@ def _update_pinecone_single(contest_data):
     except Exception as e:
         print(f"Pinecone 업데이트 중 오류: {e}")
         return False
-
-def _build_text_for_embedding(contest_data):
-    """
-    공고 데이터를 임베딩용 텍스트로 변환합니다.
-    """
-    text_parts = []
-    
-    # 제목
-    if contest_data.get('title'):
-        text_parts.append(f"제목: {contest_data['title']}")
-    
-    # 기관
-    if contest_data.get('org_name_ref'):
-        text_parts.append(f"기관: {contest_data['org_name_ref']}")
-    
-    # 분야
-    if contest_data.get('support_field'):
-        text_parts.append(f"분야: {contest_data['support_field']}")
-    
-    # 대상
-    if contest_data.get('target_audience'):
-        text_parts.append(f"대상: {contest_data['target_audience']}")
-    
-    # 지역
-    if contest_data.get('region'):
-        text_parts.append(f"지역: {contest_data['region']}")
-    
-    # 설명
-    if contest_data.get('description'):
-        description_short = contest_data['description'][:500] if len(contest_data['description']) > 500 else contest_data['description']
-        text_parts.append(f"설명: {description_short}")
-    
-    # 지원내용
-    if contest_data.get('support_content'):
-        text_parts.append(f"지원내용: {contest_data['support_content']}")
-    
-    # 마감일
-    if contest_data.get('deadline'):
-        text_parts.append(f"마감일: {contest_data['deadline']}")
-    
-    return " | ".join(text_parts)
-
-def _build_metadata_for_pinecone(contest_data):
-    """
-    공고 데이터를 Pinecone 메타데이터로 변환합니다.
-    """
-    return {
-        "title": contest_data.get('title', '제목 없음'),
-        "organization": contest_data.get('org_name_ref', '기관 정보 없음'),
-        "support_field": contest_data.get('support_field', '분야 정보 없음'),
-        "target_audience": contest_data.get('target_audience', '대상 정보 없음'),
-        "region": contest_data.get('region', '지역 정보 없음'),
-        "deadline": contest_data.get('deadline', ''),
-        "description": contest_data.get('description', '')[:1000] if contest_data.get('description') else '',
-        "contact": contest_data.get('contact', ''),
-        "application_period": contest_data.get('application_period', ''),
-        "announcement_date": contest_data.get('announcement_date', ''),
-        "status": contest_data.get('status', 'active'),
-        "data_source": "user_created"
-    }
 
 def update_contest(contest_id, updated_data):
     """

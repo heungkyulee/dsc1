@@ -236,7 +236,7 @@ def render_chat_input():
         
         # 화면 새로고침
         st.rerun()
-    """사용법 팁"""
+    # """사용법 팁"""
     with st.expander("💡 챗봇 사용법 및 팁", expanded=False):
         st.markdown("""
         ### 🎯 효과적인 질문 방법

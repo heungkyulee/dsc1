@@ -294,13 +294,6 @@ def render_welcome_section():
     <div style="text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                 border-radius: 15px; margin-bottom: 2rem; color: white;">
         <h1 style="margin: 0; font-size: 2.5rem;">🚀 K-Startup 지원사업 관리 시스템</h1>
-        <h3 style="margin: 0.5rem 0; font-weight: 300;">{greeting}</h3>
-        <p style="margin: 1rem 0; font-size: 1.1rem; opacity: 0.9;">
-            창업 생태계의 모든 지원사업 정보를 한 곳에서 관리하세요
-        </p>
-        <p style="margin: 0; font-size: 0.9rem; opacity: 0.8;">
-            📅 {current_time.strftime('%Y년 %m월 %d일 %A')}
-        </p>
     </div>
     """, unsafe_allow_html=True)
 
