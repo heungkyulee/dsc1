@@ -807,9 +807,9 @@ class RAGChatbot:
             messages.append({"role": "user", "content": current_message})
             
             response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 messages=messages,
-                max_tokens=600,
+                max_tokens=1800,
                 temperature=0.7
             )
             

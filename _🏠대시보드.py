@@ -86,23 +86,67 @@ def load_dashboard_metrics():
             expired_count = 0
             urgent_count = 0
         
-        # 기관별 분포
-        org_columns = ['organization', 'org_name_ref']
+        # 기관별 분포 - 개선된 로직
         org_data = []
+        org_columns = ['organization', 'org_name_ref']
         for col in org_columns:
             if col in df.columns:
-                org_counts = df[col].value_counts().head(10)
-                org_data = [{'기관': idx, '공고수': val} for idx, val in org_counts.items()]
-                break
+                # NaN, None, 빈 문자열, 'nan' 문자열 제외
+                valid_orgs = df[col].dropna()
+                valid_orgs = valid_orgs[valid_orgs != '']
+                valid_orgs = valid_orgs[valid_orgs.astype(str).str.lower() != 'nan']
+                
+                if len(valid_orgs) > 0:
+                    org_counts = valid_orgs.value_counts().head(10)
+                    org_data = [{'기관': str(idx), '공고수': int(val)} for idx, val in org_counts.items()]
+                    break
         
-        # 카테고리별 분포
-        category_columns = ['category', 'support_field']
+        # 기관 데이터가 없으면 전체 데이터에서 추출
+        if not org_data:
+            # 모든 기관 관련 컬럼을 합쳐서 처리
+            all_orgs = []
+            for col in org_columns:
+                if col in df.columns:
+                    orgs = df[col].dropna().astype(str)
+                    orgs = orgs[orgs != '']
+                    orgs = orgs[orgs.str.lower() != 'nan']
+                    all_orgs.extend(orgs.tolist())
+            
+            if all_orgs:
+                org_series = pd.Series(all_orgs)
+                org_counts = org_series.value_counts().head(10)
+                org_data = [{'기관': str(idx), '공고수': int(val)} for idx, val in org_counts.items()]
+        
+        # 카테고리별 분포 - 개선된 로직
         category_data = []
+        category_columns = ['category', 'support_field']
         for col in category_columns:
             if col in df.columns:
-                cat_counts = df[col].value_counts()
-                category_data = [{'분야': idx, '공고수': val} for idx, val in cat_counts.items()]
-                break
+                # NaN, None, 빈 문자열, 'nan' 문자열 제외
+                valid_cats = df[col].dropna()
+                valid_cats = valid_cats[valid_cats != '']
+                valid_cats = valid_cats[valid_cats.astype(str).str.lower() != 'nan']
+                
+                if len(valid_cats) > 0:
+                    cat_counts = valid_cats.value_counts()
+                    category_data = [{'분야': str(idx), '공고수': int(val)} for idx, val in cat_counts.items()]
+                    break
+        
+        # 카테고리 데이터가 없으면 전체 데이터에서 추출
+        if not category_data:
+            # 모든 카테고리 관련 컬럼을 합쳐서 처리
+            all_cats = []
+            for col in category_columns:
+                if col in df.columns:
+                    cats = df[col].dropna().astype(str)
+                    cats = cats[cats != '']
+                    cats = cats[cats.str.lower() != 'nan']
+                    all_cats.extend(cats.tolist())
+            
+            if all_cats:
+                cat_series = pd.Series(all_cats)
+                cat_counts = cat_series.value_counts()
+                category_data = [{'분야': str(idx), '공고수': int(val)} for idx, val in cat_counts.items()]
         
         # 최신 공고 (최대 5개)
         latest_df = df.copy()
@@ -113,12 +157,26 @@ def load_dashboard_metrics():
         
         latest_announcements = []
         for _, row in latest_df.head(5).iterrows():
+            # 기관명 처리 개선
+            org_name = row.get('organization', '')
+            if not org_name or str(org_name).lower() in ['nan', 'none', '']:
+                org_name = row.get('org_name_ref', '')
+            if not org_name or str(org_name).lower() in ['nan', 'none', '']:
+                org_name = '기관 정보 없음'
+            
+            # 카테고리 처리 개선
+            category = row.get('category', '')
+            if not category or str(category).lower() in ['nan', 'none', '']:
+                category = row.get('support_field', '')
+            if not category or str(category).lower() in ['nan', 'none', '']:
+                category = '분야 정보 없음'
+            
             latest_announcements.append({
                 'title': row.get('title', '제목 없음'),
-                'organization': row.get('organization', row.get('org_name_ref', '기관 정보 없음')),
+                'organization': str(org_name),
                 'deadline': row.get('deadline', ''),
                 'application_period': row.get('application_period', ''),
-                'category': row.get('category', row.get('support_field', '분야 정보 없음'))
+                'category': str(category)
             })
         
         return {
@@ -137,10 +195,28 @@ def load_dashboard_metrics():
 
 def create_category_chart(data):
     """카테고리별 분포 차트 생성"""
-    if not data:
-        return None
+    if not data or len(data) == 0:
+        # 데이터가 없을 때 빈 차트 대신 메시지 표시
+        fig = go.Figure()
+        fig.add_annotation(
+            text="표시할 카테고리 데이터가 없습니다",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, xanchor='center', yanchor='middle',
+            showarrow=False, font=dict(size=16)
+        )
+        fig.update_layout(
+            title='📊 지원분야별 공고 분포',
+            height=400,
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False)
+        )
+        return fig
     
     df = pd.DataFrame(data)
+    
+    # 데이터가 너무 많으면 상위 10개만 표시
+    if len(df) > 10:
+        df = df.head(10)
     
     fig = px.pie(
         df, 
@@ -161,10 +237,28 @@ def create_category_chart(data):
 
 def create_organization_chart(data):
     """기관별 공고 수 차트 생성"""
-    if not data:
-        return None
+    if not data or len(data) == 0:
+        # 데이터가 없을 때 빈 차트 대신 메시지 표시
+        fig = go.Figure()
+        fig.add_annotation(
+            text="표시할 기관 데이터가 없습니다",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, xanchor='center', yanchor='middle',
+            showarrow=False, font=dict(size=16)
+        )
+        fig.update_layout(
+            title='🏢 주관기관별 공고 현황 (상위 10개)',
+            height=400,
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False)
+        )
+        return fig
     
     df = pd.DataFrame(data)
+    
+    # 데이터가 너무 많으면 상위 10개만 표시
+    if len(df) > 10:
+        df = df.head(10)
     
     fig = px.bar(
         df, 
@@ -361,11 +455,43 @@ def main():
         # 세션 상태 초기화
         initialize_session_state()
         
+        # 전체 데이터 강제 로드 (K-Startup API 데이터 포함)
+        if not st.session_state.get('data_loaded', False):
+            with st.spinner("🔄 전체 데이터를 로드하는 중..."):
+                # 데이터 핸들러에서 전체 데이터 강제 로드
+                data_handler.load_all_data()
+                # 캐시 클리어하여 최신 데이터 사용
+                if hasattr(st, 'cache_data'):
+                    st.cache_data.clear()
+                st.session_state['data_loaded'] = True
+                st.success("✅ 전체 데이터 로드 완료!")
+        
         # 사이드바에서 새로고침 요청이 있는지 확인
         if st.session_state.get('trigger_refresh', False):
             st.session_state['trigger_refresh'] = False  # 플래그 리셋
+            st.session_state['data_loaded'] = False  # 데이터 재로드 플래그
             refresh_all_data()
             return  # 새로고침 후 함수 종료
+        
+        # 사이드바에 디버깅 모드 토글 추가
+        with st.sidebar:
+            st.markdown("---")
+            st.markdown("### 🔧 개발자 도구")
+            debug_mode = st.checkbox("디버깅 모드", value=st.session_state.get('debug_mode', False))
+            st.session_state['debug_mode'] = debug_mode
+            
+            if debug_mode:
+                st.info("디버깅 모드가 활성화되었습니다. 차트 아래에 데이터 정보가 표시됩니다.")
+            
+            # 전체 데이터 강제 새로고침 버튼
+            if st.button("🔄 전체 데이터 새로고침", use_container_width=True):
+                st.session_state['data_loaded'] = False
+                data_handler.load_all_data()
+                if hasattr(st, 'cache_data'):
+                    st.cache_data.clear()
+                st.session_state['data_loaded'] = True
+                st.success("✅ 전체 데이터 새로고침 완료!")
+                st.rerun()
         
         # 환영 섹션
         render_welcome_section()
@@ -382,6 +508,28 @@ def main():
         if not metrics:
             st.error("대시보드 데이터를 불러올 수 없습니다.")
             return
+        
+        # 디버깅 모드에서 전체 데이터 정보 표시
+        if st.session_state.get('debug_mode', False):
+            st.markdown("### 🔍 데이터 소스 정보")
+            debug_col1, debug_col2, debug_col3 = st.columns(3)
+            
+            with debug_col1:
+                st.metric("전체 로드된 데이터", f"{metrics.get('total_count', 0):,}개")
+            
+            with debug_col2:
+                st.metric("기관 데이터", f"{len(metrics.get('organizations', []))}개")
+            
+            with debug_col3:
+                st.metric("카테고리 데이터", f"{len(metrics.get('categories', []))}개")
+            
+            # 데이터 샘플 표시
+            if metrics.get('latest_announcements'):
+                st.markdown("#### 📋 데이터 샘플 (최신 3개)")
+                for i, ann in enumerate(metrics['latest_announcements'][:3]):
+                    st.write(f"{i+1}. **{ann['title']}** - {ann['organization']} ({ann['category']})")
+            
+            st.markdown("---")
         
         # 주요 메트릭 표시
         st.markdown("### 📊 주요 지표")
@@ -422,20 +570,28 @@ def main():
         chart_col1, chart_col2 = st.columns(2)
         
         with chart_col1:
-            if metrics.get('categories'):
-                category_chart = create_category_chart(metrics['categories'])
-                if category_chart:
-                    st.plotly_chart(category_chart, use_container_width=True)
-            else:
-                st.info("카테고리별 분포 데이터가 없습니다.")
+            st.markdown("#### 📊 지원분야별 분포")
+            category_chart = create_category_chart(metrics.get('categories', []))
+            if category_chart:
+                st.plotly_chart(category_chart, use_container_width=True)
+            
+            # 디버깅 정보 (개발 중에만 표시)
+            if st.session_state.get('debug_mode', False):
+                st.write(f"카테고리 데이터 수: {len(metrics.get('categories', []))}")
+                if metrics.get('categories'):
+                    st.write("카테고리 샘플:", metrics['categories'][:3])
         
         with chart_col2:
-            if metrics.get('organizations'):
-                org_chart = create_organization_chart(metrics['organizations'])
-                if org_chart:
-                    st.plotly_chart(org_chart, use_container_width=True)
-            else:
-                st.info("기관별 분포 데이터가 없습니다.")
+            st.markdown("#### 🏢 주관기관별 분포")
+            org_chart = create_organization_chart(metrics.get('organizations', []))
+            if org_chart:
+                st.plotly_chart(org_chart, use_container_width=True)
+            
+            # 디버깅 정보 (개발 중에만 표시)
+            if st.session_state.get('debug_mode', False):
+                st.write(f"기관 데이터 수: {len(metrics.get('organizations', []))}")
+                if metrics.get('organizations'):
+                    st.write("기관 샘플:", metrics['organizations'][:3])
         
         st.markdown("---")
         

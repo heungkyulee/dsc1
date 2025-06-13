@@ -200,9 +200,6 @@ def edit_announcement(announcement_id: str, current_data):
     st.markdown("---")
     st.markdown(f"### ✏️ 공고 수정: {current_data.get('title', '제목없음')}")
 
-    st.write(f"[DEBUG] 폼 렌더링 - announcement_id: {announcement_id}")
-    print(f"[DEBUG] 폼 렌더링 - announcement_id: {announcement_id}")
-
     # 수정 전 원본 데이터 표시
     with st.expander("📋 현재 데이터 미리보기", expanded=False):
         col1, col2 = st.columns(2)
@@ -214,10 +211,8 @@ def edit_announcement(announcement_id: str, current_data):
             st.write("**지역:**", current_data.get('region', 'N/A'))
             st.write("**마감일:**", current_data.get('deadline', 'N/A'))
             st.write("**대상:**", current_data.get('target_audience', 'N/A'))
-    
+
     with st.form(f"edit_form_{announcement_id}"):
-        st.write(f"[DEBUG] 폼 내부 진입 - announcement_id: {announcement_id}")
-        print(f"[DEBUG] 폼 내부 진입 - announcement_id: {announcement_id}")
         # 기본 정보 섹션
         st.markdown("#### 📊 기본 정보")
         edit_col1, edit_col2 = st.columns(2)
@@ -350,8 +345,6 @@ def edit_announcement(announcement_id: str, current_data):
         
         with submit_col1:
             if st.form_submit_button("💾 수정 저장", type="primary"):
-                st.write(f"[DEBUG] 제출 버튼 클릭 - announcement_id: {announcement_id}")
-                print(f"[DEBUG] 제출 버튼 클릭 - announcement_id: {announcement_id}")
                 # 입력 검증
                 if not new_title.strip():
                     st.error("❌ 제목은 필수 입력 항목입니다.")
@@ -369,13 +362,6 @@ def edit_announcement(announcement_id: str, current_data):
                         
                         # pblancId 가져오기 (기존 데이터에서)
                         pblancId = current_data.get('pblancId', announcement_id)
-                        
-                        # 디버깅 정보 출력
-                        st.write("🔍 **디버깅 정보:**")
-                        st.write(f"- 입력받은 ID: `{announcement_id}`")
-                        st.write(f"- 현재 데이터의 pblancId: `{current_data.get('pblancId', 'N/A')}`")
-                        st.write(f"- 사용할 ID: `{pblancId}`")
-                        st.write(f"- 현재 데이터 키들: {list(current_data.keys())[:10]}")
                         
                         updated_data = {
                             "title": new_title.strip(),
@@ -396,22 +382,12 @@ def edit_announcement(announcement_id: str, current_data):
                             "updated_at": datetime.now().isoformat()
                         }
                         
-                        st.write(f"[DEBUG] 업데이트 데이터: {updated_data}")
-                        logging.getLogger().info(f"[DEBUG] 업데이트 데이터: {updated_data}")
-                        print(f"[DEBUG] 업데이트 데이터: {updated_data}")
-                        
-                        st.write(f"- 업데이트할 필드 수: {len(updated_data)}")
-                        
                         # 2단계: 데이터베이스 업데이트 (JSON 파일 + Pinecone)
                         status_text.text("💾 데이터베이스 업데이트 중...")
                         progress_bar.progress(50)
                         
                         # update_announcement 함수 사용 (Pinecone 업데이트 포함)
-                        st.write(f"- update_announcement 함수 호출 중... ID: `{pblancId}`")
                         success = data_handler.update_announcement(pblancId, updated_data)
-                        st.write(f"[DEBUG] update_announcement 결과: {success}")
-                        logging.getLogger().info(f"[DEBUG] update_announcement 결과: {success}")
-                        print(f"[DEBUG] update_announcement 결과: {success}")
                         
                         if success:
                             # 3단계: AI 시스템 업데이트 완료
@@ -446,7 +422,6 @@ def edit_announcement(announcement_id: str, current_data):
                             status_text.text("❌ 업데이트 실패")
                             progress_bar.progress(0)
                             st.error("❌ 수정 중 오류가 발생했습니다.")
-                            st.error("📋 **디버깅 힌트:** 위의 디버깅 정보와 콘솔 로그를 확인해주세요.")
                     
                     except Exception as e:
                         status_text.text("❌ 오류 발생")
@@ -469,4 +444,4 @@ def edit_announcement(announcement_id: str, current_data):
         
         with submit_col3:
             st.caption("* 표시된 항목은 필수 입력 사항입니다.")
-            st.caption("💡 수정 시 AI 검색 시스템도 자동으로 업데이트됩니다.") 
+        st.caption("💡 수정 시 AI 검색 시스템도 자동으로 업데이트됩니다.") 

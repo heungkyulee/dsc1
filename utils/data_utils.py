@@ -17,31 +17,41 @@ logger = get_logger(__name__)
 
 @st.cache_data(ttl=config.CACHE_TTL)
 def load_announcements_data() -> pd.DataFrame:
-    """공고 데이터 로드 (캐싱 적용)"""
+    """공고 데이터 로드 (캐싱 적용) - 전체 K-Startup 데이터 포함"""
     try:
-        announcements = data_handler.get_all_announcements()
-        logger.info(f"데이터 핸들러에서 받은 데이터 타입: {type(announcements)}")
+        # get_all_contests()를 사용하여 전체 데이터 로드 (K-Startup API + 사용자 추가 데이터)
+        all_contests = data_handler.get_all_contests()
+        logger.info(f"데이터 핸들러에서 받은 데이터 타입: {type(all_contests)}")
         
-        if announcements:
-            # dict를 DataFrame으로 변환
-            if isinstance(announcements, dict):
-                logger.info(f"딕셔너리 데이터 키 수: {len(announcements)}")
+        if all_contests:
+            # list를 DataFrame으로 변환
+            if isinstance(all_contests, list):
+                logger.info(f"리스트 데이터 길이: {len(all_contests)}")
+                df = pd.DataFrame(all_contests)
+            elif isinstance(all_contests, dict):
+                logger.info(f"딕셔너리 데이터 키 수: {len(all_contests)}")
                 # 첫 번째 항목 구조 확인
-                if announcements:
-                    first_key = list(announcements.keys())[0]
-                    logger.info(f"첫 번째 항목 구조: {type(announcements[first_key])}")
+                if all_contests:
+                    first_key = list(all_contests.keys())[0]
+                    logger.info(f"첫 번째 항목 구조: {type(all_contests[first_key])}")
                 
-                df = pd.DataFrame.from_dict(announcements, orient='index')
-            elif isinstance(announcements, list):
-                logger.info(f"리스트 데이터 길이: {len(announcements)}")
-                df = pd.DataFrame(announcements)
+                df = pd.DataFrame.from_dict(all_contests, orient='index')
             else:
-                logger.warning(f"예상치 못한 데이터 타입: {type(announcements)}")
+                logger.warning(f"예상치 못한 데이터 타입: {type(all_contests)}")
                 df = pd.DataFrame()
             
             if not df.empty:
                 logger.info(f"DataFrame 컬럼: {list(df.columns)}")
                 logger.info(f"DataFrame 형태: {df.shape}")
+                
+                # pblancId가 없는 데이터에 인덱스 기반 ID 추가
+                if 'pblancId' not in df.columns:
+                    df['pblancId'] = df.index.astype(str)
+                else:
+                    # pblancId가 비어있는 행들에 인덱스 기반 ID 추가
+                    for idx, row in df.iterrows():
+                        if pd.isna(df.at[idx, 'pblancId']) or not df.at[idx, 'pblancId']:
+                            df.at[idx, 'pblancId'] = str(idx)
                 
                 # 날짜 컬럼 처리
                 date_columns = ['announcement_date', 'deadline', 'created_at', 'updated_at']
@@ -50,7 +60,7 @@ def load_announcements_data() -> pd.DataFrame:
                         df[col] = pd.to_datetime(df[col], errors='coerce')
                         logger.debug(f"날짜 컬럼 {col} 처리 완료")
                 
-                logger.info(f"공고 데이터 로드 완료: {len(df)}개 항목")
+                logger.info(f"공고 데이터 로드 완료: {len(df)}개 항목 (K-Startup API + 사용자 추가 데이터)")
                 return df
             else:
                 logger.warning("빈 DataFrame 반환")
