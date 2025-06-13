@@ -267,23 +267,19 @@ def render_card_view(df):
             action_col1, action_col2 = st.columns(2)
             
             with action_col1:
-                # 수정 기능 개선 - 여러 ID 필드 확인
                 contest_id = None
                 possible_id_fields = ['pblancId', 'id']
-                
-                # 가능한 ID 필드들을 순서대로 확인
                 for id_field in possible_id_fields:
                     if id_field in row and pd.notna(row[id_field]) and row[id_field]:
                         contest_id = str(row[id_field])
                         break
-                
-                # 모든 ID 필드가 없으면 인덱스 사용
                 if not contest_id:
                     contest_id = str(idx)
-                
                 if st.button("✏️ 수정", key=f"edit_{idx}"):
-                    # 디버깅 정보 출력
-                    st.info(f"🔍 수정 대상 ID: {contest_id} (원본 인덱스: {idx})")
+                    st.session_state['editing_id'] = contest_id
+                    st.rerun()
+                # 수정 폼은 editing_id가 일치할 때만 렌더링
+                if st.session_state.get('editing_id') == contest_id:
                     edit_announcement(contest_id, row)
             
             with action_col2:

@@ -734,8 +734,9 @@ class RAGChatbot:
             """.strip()
             
             contexts.append(context_piece)
-        
-        return "\n\n" + "\n\n".join(contexts)
+        full_context = "\n\n" + "\n\n".join(contexts)
+        logger.info(f"[RAG 컨텍스트 로그] 검색 결과 컨텍스트(상위 {len(contexts)}개):\n{full_context}")
+        return full_context
     
     def _build_conversation_context(self) -> str:
         """대화 기록을 컨텍스트로 구성"""

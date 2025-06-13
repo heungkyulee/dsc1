@@ -8,9 +8,11 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import time
+import logging
 
 from logger import get_logger, log_user_action
 import data_handler
+from utils.data_utils import clear_announcements_cache
 
 logger = get_logger(__name__)
 
@@ -197,7 +199,10 @@ def edit_announcement(announcement_id: str, current_data):
     """공고 수정 폼 - 개선된 UI 및 Pinecone 업데이트 포함"""
     st.markdown("---")
     st.markdown(f"### ✏️ 공고 수정: {current_data.get('title', '제목없음')}")
-    
+
+    st.write(f"[DEBUG] 폼 렌더링 - announcement_id: {announcement_id}")
+    print(f"[DEBUG] 폼 렌더링 - announcement_id: {announcement_id}")
+
     # 수정 전 원본 데이터 표시
     with st.expander("📋 현재 데이터 미리보기", expanded=False):
         col1, col2 = st.columns(2)
@@ -211,6 +216,8 @@ def edit_announcement(announcement_id: str, current_data):
             st.write("**대상:**", current_data.get('target_audience', 'N/A'))
     
     with st.form(f"edit_form_{announcement_id}"):
+        st.write(f"[DEBUG] 폼 내부 진입 - announcement_id: {announcement_id}")
+        print(f"[DEBUG] 폼 내부 진입 - announcement_id: {announcement_id}")
         # 기본 정보 섹션
         st.markdown("#### 📊 기본 정보")
         edit_col1, edit_col2 = st.columns(2)
@@ -343,6 +350,8 @@ def edit_announcement(announcement_id: str, current_data):
         
         with submit_col1:
             if st.form_submit_button("💾 수정 저장", type="primary"):
+                st.write(f"[DEBUG] 제출 버튼 클릭 - announcement_id: {announcement_id}")
+                print(f"[DEBUG] 제출 버튼 클릭 - announcement_id: {announcement_id}")
                 # 입력 검증
                 if not new_title.strip():
                     st.error("❌ 제목은 필수 입력 항목입니다.")
@@ -387,15 +396,22 @@ def edit_announcement(announcement_id: str, current_data):
                             "updated_at": datetime.now().isoformat()
                         }
                         
+                        st.write(f"[DEBUG] 업데이트 데이터: {updated_data}")
+                        logging.getLogger().info(f"[DEBUG] 업데이트 데이터: {updated_data}")
+                        print(f"[DEBUG] 업데이트 데이터: {updated_data}")
+                        
                         st.write(f"- 업데이트할 필드 수: {len(updated_data)}")
                         
                         # 2단계: 데이터베이스 업데이트 (JSON 파일 + Pinecone)
                         status_text.text("💾 데이터베이스 업데이트 중...")
                         progress_bar.progress(50)
                         
-                        # update_contest 함수 사용 (Pinecone 업데이트 포함)
-                        st.write(f"- update_contest 함수 호출 중... ID: `{pblancId}`")
-                        success = data_handler.update_contest(pblancId, updated_data)
+                        # update_announcement 함수 사용 (Pinecone 업데이트 포함)
+                        st.write(f"- update_announcement 함수 호출 중... ID: `{pblancId}`")
+                        success = data_handler.update_announcement(pblancId, updated_data)
+                        st.write(f"[DEBUG] update_announcement 결과: {success}")
+                        logging.getLogger().info(f"[DEBUG] update_announcement 결과: {success}")
+                        print(f"[DEBUG] update_announcement 결과: {success}")
                         
                         if success:
                             # 3단계: AI 시스템 업데이트 완료
@@ -415,12 +431,16 @@ def edit_announcement(announcement_id: str, current_data):
                             if hasattr(st, 'cache_data'):
                                 st.cache_data.clear()
                             
+                            # 모든 관련 캐시 초기화
+                            clear_announcements_cache()
+                            
                             # 다음 페이지 로드 시 실시간 데이터 사용하도록 플래그 설정
                             st.session_state['need_refresh'] = True
                             
                             # 성공 후 안내
                             st.info("🔄 수정이 완료되었습니다! 페이지를 새로고침합니다...")
                             time.sleep(2)
+                            st.session_state['editing_id'] = None
                             st.rerun()
                         else:
                             status_text.text("❌ 업데이트 실패")
@@ -444,6 +464,7 @@ def edit_announcement(announcement_id: str, current_data):
         with submit_col2:
             if st.form_submit_button("❌ 취소", type="secondary"):
                 st.info("수정이 취소되었습니다.")
+                st.session_state['editing_id'] = None
                 st.rerun()
         
         with submit_col3:

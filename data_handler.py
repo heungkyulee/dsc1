@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 import uuid
 import shutil
+import logging
 
 # --- 파일 경로 ---
 RAW_DATA_FILE = "kstartup_contest_info.json"
@@ -299,21 +300,45 @@ def find_announcements(keyword=None, org_name=None, region=None, support_field=N
 
 
 def update_announcement(pbancSn_str, updated_data):
-    """특정 공고 정보를 업데이트합니다. (인덱스 업데이트는 단순화)"""
-    announcements = load_json(ANNS_FILE)
-    if pbancSn_str not in announcements:
-        print(f"[에러] 공고 ID {pbancSn_str}를 찾을 수 없습니다.")
+    logger = logging.getLogger("update_announcement_debug")
+    print(f"[DEBUG] update_announcement 진입 - pbancSn_str: {pbancSn_str}")
+    logger.info(f"[DEBUG] update_announcement 진입 - pbancSn_str: {pbancSn_str}")
+    print(f"[DEBUG] 업데이트 데이터: {updated_data}")
+    logger.info(f"[DEBUG] 업데이트 데이터: {updated_data}")
+    try:
+        # 1. JSON 파일 업데이트
+        announcements = load_json(ANNS_FILE)
+        if pbancSn_str not in announcements:
+            print(f"[에러] 공고 ID {pbancSn_str}를 찾을 수 없습니다.")
+            logger.error(f"[에러] 공고 ID {pbancSn_str}를 찾을 수 없습니다.")
+            return False
+        announcements[pbancSn_str].update(updated_data)
+        save_json(announcements, ANNS_FILE)
+        print(f"[DEBUG] 저장 후 데이터: {announcements[pbancSn_str]}")
+        logger.info(f"[DEBUG] 저장 후 데이터: {announcements[pbancSn_str]}")
+        print(f"[정보] 공고 {pbancSn_str} JSON 파일 업데이트 완료")
+        logger.info(f"[정보] 공고 {pbancSn_str} JSON 파일 업데이트 완료")
+        # 3. Pinecone 업데이트
+        try:
+            from rag_system import ingest_announcements_to_pinecone
+            success, message = ingest_announcements_to_pinecone({pbancSn_str: announcements[pbancSn_str]})
+            print(f"[DEBUG] Pinecone 결과: {success}, {message}")
+            logger.info(f"[DEBUG] Pinecone 결과: {success}, {message}")
+            if not success:
+                print(f"[경고] Pinecone 업데이트 실패: {message}")
+                logger.warning(f"[경고] Pinecone 업데이트 실패: {message}")
+                return False
+            print(f"[정보] 공고 {pbancSn_str} Pinecone 업데이트 완료")
+            logger.info(f"[정보] 공고 {pbancSn_str} Pinecone 업데이트 완료")
+        except Exception as e:
+            print(f"[경고] Pinecone 업데이트 중 오류: {e}")
+            logger.warning(f"[경고] Pinecone 업데이트 중 오류: {e}")
+            return False
+        return True
+    except Exception as e:
+        print(f"[에러] 공고 업데이트 중 오류 발생: {e}")
+        logger.error(f"[에러] 공고 업데이트 중 오류 발생: {e}")
         return False
-
-    # TODO: 실제 업데이트 시에는 기존 인덱스 제거 및 새 인덱스 추가 필요
-    # 여기서는 announcements.json만 업데이트
-    announcements[pbancSn_str].update(updated_data)
-    save_json(announcements, ANNS_FILE)
-
-    # 인덱스 업데이트 (간단하게 다시 전체 처리)
-    # process_raw_data() # 비효율적일 수 있음. 부분 업데이트 로직 필요.
-    print(f"[정보] 공고 {pbancSn_str} 업데이트 완료. (인덱스 업데이트 필요시 process_raw_data() 재실행 권장)")
-    return True
 
 def delete_announcement(pbancSn_str):
     """특정 공고 정보를 삭제합니다. (인덱스 업데이트는 단순화)"""
